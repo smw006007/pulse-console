@@ -1,0 +1,45 @@
+{
+  "_comment": "Copy to devices.json and edit. bind to a PRIVATE interface only (localhost or your VPN/tailnet IP) and SET a token — these endpoints are full device control. devices.json is yours; never commit it. You can also configure most of this from the console UI (⚙ Options → Open server settings).",
+
+  "adb_path": "",
+  "bind": "127.0.0.1",
+  "port": 8787,
+  "token": "SET-A-LONG-RANDOM-SECRET",
+  "poll_seconds": 6,
+  "mdns_autoconnect": true,
+  "batch": { "wave_size": 8, "wave_delay_sec": 20 },
+  "ws_scrcpy_url": "",
+
+  "acurast_backend": {
+    "base_url": "",
+    "api_key": "",
+    "manager_address": "",
+    "poll_seconds": 60
+  },
+
+  "_processor_comment": "Which Acurast processor this console manages. Leave blank for the canary default.",
+  "processor": {
+    "package": "",
+    "family_match": "",
+    "exclude_match": ""
+  },
+
+  "pulse_health": {
+    "base_url": "https://www.acurastpulse.com",
+    "manager_id": "",
+    "poll_seconds": 300
+  },
+
+  "_command_channel_comment": "Signed readb/locate channel. Set the SAME value here and in the app (ENABLE_PROTECTION --es command_secret <same>). Blank = channel off. Also flip READB_ENABLED in fleet.py after your own operator-present test.",
+  "guardian_command_secret": "",
+
+  "guardian_update": {
+    "repo": "",
+    "github_token": "",
+    "package": "com.acurast.pulse.guardian",
+    "cache_dir": "guardian-apks",
+    "telemetry_url": ""
+  },
+
+  "devices": []
+}

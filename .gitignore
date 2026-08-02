@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+devices.json
+guardian-apks/
+*.db
+release-keystore.jks

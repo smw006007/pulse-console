@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AcurastPulse · Fleet Console</title>
+  <link rel="stylesheet" href="/fleet-console.css">
+</head>
+<body>
+  <a class="skip-link" href="#device-region">Skip to device fleet</a>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Application navigation">
+      <a class="brand" href="#top" aria-label="AcurastPulse home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-copy"><strong>Acurast</strong><small>PULSE</small></span>
+      </a>
+
+      <nav class="primary-nav">
+        <a href="#overview" aria-label="Overview"><span aria-hidden="true">⌁</span><b>Overview</b></a>
+        <a class="active" href="#device-region" aria-current="page" aria-label="Fleet"><span aria-hidden="true">▦</span><b>Fleet</b><em id="navFleetCount">0</em></a>
+        <a href="#activity" aria-label="Activity"><span aria-hidden="true">⌁</span><b>Activity</b></a>
+        <button type="button" data-open-panel="guardian" aria-label="Guardian"><span aria-hidden="true">⬡</span><b>Guardian</b></button>
+      </nav>
+
+      <div class="sidebar-section">
+        <span>Operations</span>
+        <button type="button" data-action="discover" aria-label="Discovery"><span aria-hidden="true">⌖</span><b>Discovery</b></button>
+        <button type="button" data-action="scan-versions" aria-label="Versions"><span aria-hidden="true">↻</span><b>Versions</b></button>
+        <button type="button" data-action="open-analytics" aria-label="Analytics"><span aria-hidden="true">⌁</span><b>Analytics</b></button>
+        <button type="button" data-action="open-onboard" aria-label="Onboard"><span aria-hidden="true">＋</span><b>Onboard</b></button>
+        <button type="button" data-open-dialog="importDlg" aria-label="Import"><span aria-hidden="true">⇥</span><b>Import</b></button>
+      </div>
+
+      <div class="sidebar-foot">
+        <div class="sidebar-health"><span class="live-dot"></span><div><b>Control plane</b><small id="sideConnection">Connecting</small></div></div>
+        <button class="sidebar-collapse" type="button" data-action="toggle-sidebar" aria-label="Collapse sidebar">‹</button>
+      </div>
+    </aside>
+
+    <main id="top" class="workspace">
+      <header class="fleet-header">
+        <div class="header-copy">
+          <div class="breadcrumbs"><span>Acurast Network</span><i>/</i><strong>Fleet Operations</strong></div>
+          <div class="title-line"><h1>Fleet Console</h1><span id="connectionPill" class="connection-pill"><i></i>Connecting</span></div>
+          <p>Wireless ADB device management and remote control.</p>
+        </div>
+        <div class="header-actions">
+          <div class="refresh-meta"><span>Last refresh</span><strong id="lastRefresh">—</strong></div>
+          <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh fleet" title="Refresh fleet">↻</button>
+          <button class="button" type="button" data-open-dialog="importDlg"><span aria-hidden="true">＋</span> Import</button>
+          <button class="button" type="button" data-action="open-analytics"><span aria-hidden="true">⌁</span> Analytics</button>
+          <button class="button primary" type="button" data-action="discover"><span aria-hidden="true">⌖</span> Discover</button>
+          <button class="button command-button" type="button" data-action="open-palette" aria-label="Open command palette" title="Search devices and run fleet commands"><span aria-hidden="true">⌕</span> Commands <kbd id="paletteHint">Ctrl K</kbd></button>
+          <button class="icon-button" type="button" data-action="open-shortcuts" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
+          <button class="icon-button" type="button" data-action="open-options" aria-label="Console options" title="Console options — what to show, refresh rate, density">⚙</button>
+          <button class="icon-button" type="button" data-action="toggle-settings" aria-label="Fleet settings" title="Fleet settings">•••</button>
+          <div class="settings-popover" id="settingsPopover" hidden>
+            <label for="token">Fleet access token</label>
+            <input id="token" type="password" autocomplete="off" placeholder="Required for actions">
+            <label class="toggle-row"><input id="autoRefresh" type="checkbox" checked> <span>Auto-refresh every 4 seconds</span></label>
+            <label class="toggle-row"><input id="reduceMotion" type="checkbox"> <span>Reduce interface motion</span></label>
+          </div>
+        </div>
+      </header>
+
+      <div id="connectionBanner" class="connection-banner" role="alert" hidden>
+        <span>Connection to the fleet control plane was lost.</span>
+        <button type="button" data-action="refresh">Retry now</button>
+      </div>
+
+      <section id="overview" class="section kpi-section" aria-labelledby="kpiHeading">
+        <div class="section-heading visually-hidden"><h2 id="kpiHeading">Fleet status</h2></div>
+        <div id="kpiGrid" class="kpi-grid" aria-live="polite"></div>
+        <div id="kpiNominal" class="kpi-nominal" hidden></div>
+      </section>
+
+      <section id="updatePanel" class="section panel update-panel" aria-labelledby="updateHeading" hidden>
+        <div class="update-identity"><span class="update-glyph">⇧</span><div><span class="eyebrow">LITE OTA</span><h2 id="updateHeading">Processor update</h2><p id="updateReleaseMeta">Checking release state…</p></div></div>
+        <div id="updateStats" class="update-stats"></div>
+        <div class="update-actions"><button class="button" type="button" data-action="update-check">Check now</button><button class="button primary" type="button" data-action="update-selected">Update selected</button><button class="button primary" type="button" data-action="update-outdated">Update all outdated</button></div>
+      </section>
+
+      <section class="section overview-layout" aria-label="Fleet overview">
+        <article class="panel overview-panel">
+          <div class="panel-header">
+            <div><span class="eyebrow">FLEET MAP</span><h2>Operational distribution</h2></div>
+            <label class="map-groupby">Group
+              <select id="mapGroupBy" title="How cells are arranged. Position is stable within a group, so a device keeps its place between refreshes.">
+                <option value="subnet">Subnet</option>
+                <option value="model">Phone model</option>
+                <option value="alias">Alias</option>
+                <option value="custom">Custom groups</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <button class="button map-groups-btn" type="button" data-action="open-map-groups" title="Assign selected devices to a named group">Groups…</button>
+            <div class="segmented" id="heatmapModes" role="tablist" aria-label="Heatmap metric">
+              <button class="active" type="button" role="tab" aria-selected="true" aria-controls="heatmap" tabindex="0" data-heatmap-mode="health">Health</button>
+              <button type="button" role="tab" aria-selected="false" aria-controls="heatmap" tabindex="-1" data-heatmap-mode="temperature">Temp</button>
+              <button type="button" role="tab" aria-selected="false" aria-controls="heatmap" tabindex="-1" data-heatmap-mode="battery">Battery</button>
+              <button type="button" role="tab" aria-selected="false" aria-controls="heatmap" tabindex="-1" data-heatmap-mode="version">Version</button>
+              <button type="button" role="tab" aria-selected="false" aria-controls="heatmap" tabindex="-1" data-heatmap-mode="state">State</button>
+            </div>
+          </div>
+          <div class="overview-stats" id="overviewStats"></div>
+          <div id="heatmap" class="heatmap" role="list" aria-label="Fleet device heatmap"></div>
+          <div id="heatmapLegend" class="heatmap-legend"></div>
+          <p id="heatmapNote" class="panel-note"></p>
+        </article>
+
+        <aside id="activity" class="panel activity-panel" aria-labelledby="activityHeading">
+          <div class="panel-header">
+            <div><span class="eyebrow">LIVE OPERATIONS</span><h2 id="activityHeading">Activity & alerts</h2></div>
+            <span id="activityCount" class="count-badge">0</span>
+          </div>
+          <div class="activity-tabs" role="tablist" aria-label="Activity filter">
+            <button class="active" type="button" data-activity-filter="all" role="tab" aria-selected="true" aria-controls="activityFeed" tabindex="0">All</button>
+            <button type="button" data-activity-filter="alert" role="tab" aria-selected="false" aria-controls="activityFeed" tabindex="-1">Alerts</button>
+            <button type="button" data-activity-filter="action" role="tab" aria-selected="false" aria-controls="activityFeed" tabindex="-1">Actions</button>
+          </div>
+          <div id="activityFeed" class="activity-feed" role="tabpanel" aria-live="polite"></div>
+        </aside>
+      </section>
+
+      <section id="guardianPanel" class="section panel guardian-panel" aria-labelledby="guardianHeading" hidden>
+        <div class="panel-header guardian-title">
+          <div><span class="eyebrow">GUARDIAN WORKFLOW</span><h2 id="guardianHeading">Release and installation management</h2></div>
+          <button class="icon-button" type="button" data-close-panel="guardian" aria-label="Close Guardian panel">×</button>
+        </div>
+        <div class="workflow-grid four-steps">
+          <div class="workflow-step"><span class="step-number">01</span><div><h3>Select release</h3><p>Choose a signed Guardian build from the configured repository.</p><select id="guardianRelease"><option value="latest">latest (newest)</option></select><button class="button" type="button" data-action="guardian-releases">Refresh releases</button><a class="button" id="apkDownload" href="/guardian.apk" download title="Download the signed, SHA-256 + cert-verified APK for the selected release — for hand-testing on phones outside this console">⬇ Download APK</a></div></div>
+          <div class="workflow-step"><span class="step-number">02</span><div><h3>Scan fleet</h3><p>Read installed Guardian versions from every online device.</p><button class="button" type="button" data-action="guardian-scan">Scan Guardian</button></div></div>
+          <div class="workflow-step"><span class="step-number">03</span><div><h3>Deploy safely</h3><p>Install the verified APK in backend-controlled waves.</p><div class="button-row"><button class="button primary" type="button" data-action="guardian-install-selected">Install selected</button><button class="button" type="button" data-action="guardian-install-online">Install all online</button></div></div></div>
+          <div class="workflow-step"><span class="step-number">04</span><div><h3>Grant and arm</h3><p>Apply permissions, WD recovery, and fleet-mode protection.</p><div class="button-row"><button class="button primary" type="button" data-action="provision-selected">Provision selected</button><button class="button" type="button" data-action="provision-online">Provision all online</button></div></div></div>
+        </div>
+        <div id="guardianProgress" class="job-progress"></div>
+        <div class="guardian-utilities"><div><span class="eyebrow">FLEET UTILITIES</span><p>Onboard phones, manage reversible debloat, inspect readiness drift, or enable the legacy Keep-Lite fallback.</p></div><div class="button-row"><button class="button" type="button" data-action="open-onboard">＋ Onboard phone</button><button class="button" type="button" data-action="open-debloat">⌁ Debloat</button><button class="button" type="button" data-action="show-readiness">Readiness details</button><button id="keepLiteButton" class="button" type="button" aria-pressed="false" data-action="toggle-keep-lite">Keep Lite · off</button><button id="screensaverButton" class="button" type="button" data-action="toggle-screensaver" title="Black screen with a bouncing green dot while Lite is foreground. Locate still works on top.">Screensaver · off</button><button class="button" type="button" data-action="reset-fg-fleet">↺ Reset FG losses</button></div></div>
+      </section>
+
+      <section id="device-region" class="section devices-section" aria-labelledby="devicesHeading">
+        <div class="devices-title-row">
+          <div><span class="eyebrow">DEVICE INVENTORY</span><h2 id="devicesHeading">Operations fleet <span id="visibleCount">0 devices</span></h2></div>
+          <div class="view-switcher" role="group" aria-label="Device view">
+            <button type="button" class="active" data-view="table" aria-pressed="true" aria-label="Table view" title="Table view">☷</button>
+            <button type="button" data-view="grid" aria-pressed="false" aria-label="Compact card view" title="Compact card view">▦</button>
+          </div>
+        </div>
+
+        <div class="device-toolbar">
+          <div class="search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <label class="visually-hidden" for="fleetSearch">Search and filter devices</label>
+            <input id="fleetSearch" type="search" placeholder="Search devices or use status:offline, temp:>45, battery:<30…" autocomplete="off">
+            <kbd>/</kbd>
+          </div>
+          <button class="button filter-button" type="button" data-action="toggle-filter-builder"><span aria-hidden="true">≡</span> Filters <em id="filterCount">0</em></button>
+          <select id="sortSelect" class="sort-select" aria-label="Sort devices">
+            <option value="identity:asc">Name · A–Z</option>
+            <option value="health:asc">Health · lowest</option>
+            <option value="status:asc">Status</option>
+            <option value="temp:desc">Temperature · highest</option>
+            <option value="battery:asc">Battery · lowest</option>
+            <option value="lastSeen:desc">Last seen · newest</option>
+          </select>
+          <button class="icon-button" type="button" data-action="toggle-density" aria-pressed="false" aria-label="Toggle row density" title="Compact rows">⇕</button>
+          <button class="icon-button" type="button" data-action="columns" aria-label="Column visibility" title="Column visibility">⚙</button>
+        </div>
+
+        <div id="filterBuilder" class="filter-builder" hidden>
+          <span>Quick filters</span>
+          <button type="button" data-query="status:online">Online</button>
+          <button type="button" data-query="status:offline">Offline</button>
+          <button type="button" data-query="outdated:true">Outdated</button>
+          <button type="button" data-query="temp:>42">Hot devices</button>
+          <button type="button" data-query="battery:<30">Low battery</button>
+          <button type="button" data-query="armed:false">Not armed</button>
+          <button type="button" data-query="idle:true">Idle hub</button>
+          <button type="button" data-query="anr:&gt;0">ANRs</button>
+          <button type="button" data-query="protection:false">Not armed</button>
+          <span class="filter-divider" aria-hidden="true"></span>
+          <span>Saved</span>
+          <span id="savedPresets" class="saved-presets"></span>
+          <button type="button" class="preset-save" data-action="save-preset" title="Save the current search as a reusable filter">＋ Save current</button>
+        </div>
+        <div id="filterChips" class="filter-chips" aria-live="polite"></div>
+
+        <div id="tableView" class="table-shell">
+          <table class="device-table">
+            <thead><tr>
+              <th class="select-col"><input id="selectVisible" type="checkbox" aria-label="Select visible devices"></th>
+              <th class="identity-col" data-sort="identity" title="Device alias and IP. Click a row to open its full detail drawer.">Device <span>↕</span></th>
+              <th data-sort="status" title="ADB transport state as this console sees it -- online means reachable, not necessarily earning.">State <span>↕</span></th>
+              <th data-sort="health" title="Composite 0-100 score from state, temperature, battery, arming and version. Hover a score for the breakdown.">Health <span>↕</span></th>
+              <th data-sort="ip" title="The phone's IP on the farm LAN.">Host <span>↕</span></th>
+              <th data-sort="model" title="Model name and whether the Processor runs in an Android work profile.">Model / profile <span>↕</span></th>
+              <th data-sort="temp" title="Reported CPU/battery temperature. Sustained highs throttle compute.">Temperature <span>↕</span></th>
+              <th data-sort="battery" title="Charge level. These phones sit on AC, so anything low while charging is a hardware issue.">Battery <span>↕</span></th>
+              <th title="Guardian's reported state and whether it is armed.">Guardian</th>
+              <th data-sort="version" title="Installed Processor (Lite) build, with when that version was last scanned.">Version <span>↕</span></th>
+              <th data-sort="lastSeen" title="When this console last had contact with the device.">Last seen <span>↕</span></th>
+              <th title="Whether the node is computing, plus exception badges: idle hub, ANRs, foreground state and Pulse health.">Compute</th>
+              <th class="actions-col">Actions</th>
+            </tr></thead>
+            <tbody id="deviceTableBody"></tbody>
+          </table>
+        </div>
+        <div id="cardView" class="device-card-grid" hidden></div>
+        <div id="emptyState" class="empty-state" hidden></div>
+        <div class="list-footer"><span id="listSummary">Showing 0 devices</span><span>Live snapshot · device actions require backend confirmation</span></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="bulkDock" class="bulk-dock" hidden>
+    <div class="bulk-count"><strong id="selectedCount">0</strong><span>selected</span></div>
+    <div class="bulk-divider"></div>
+    <button type="button" data-bulk-action="wake"><span>◉</span>Wake<small></small></button>
+    <button type="button" data-bulk-action="screenshot"><span>▣</span>Screenshot<small></small></button>
+    <button type="button" data-bulk-action="logcat"><span>≡</span>Logcat<small></small></button>
+    <button type="button" data-bulk-action="open_acurast"><span>↗</span>Open<small></small></button>
+    <button type="button" data-bulk-action="shell"><span>&gt;_</span>Shell<small></small></button>
+    <button type="button" data-bulk-action="provision"><span>⬡</span>Provision<small></small></button>
+    <button type="button" data-bulk-action="update"><span>⇧</span>Update<small></small></button>
+    <button class="destructive" type="button" data-bulk-action="reboot"><span>↻</span>Reboot<small></small></button>
+    <button class="clear-selection" type="button" data-action="clear-selection">Clear</button>
+  </div>
+
+  <div id="drawerScrim" class="drawer-scrim" hidden></div>
+  <aside id="deviceDrawer" class="device-drawer" aria-labelledby="drawerTitle" aria-hidden="true">
+    <div id="drawerContent"></div>
+  </aside>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <dialog id="confirmDlg" class="confirm-dialog">
+    <form method="dialog">
+      <div class="dialog-icon" id="confirmIcon">!</div>
+      <h2 id="confirmTitle">Confirm action</h2>
+      <p id="confirmBody"></p>
+      <div id="confirmPhraseWrap" hidden><label for="confirmPhrase">Type <strong id="confirmPhraseLabel"></strong> to confirm</label><input id="confirmPhrase" type="text" autocomplete="off"></div>
+      <div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button id="confirmGo" class="button danger" value="default">Confirm</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="importDlg" class="wide-dialog">
+    <form method="dialog" id="importForm">
+      <div class="dialog-heading"><div><span class="eyebrow">FLEET ONBOARDING</span><h2>Import devices</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p>Paste one device per line as <code>label,ip</code>, <code>label,ip:port</code>, or a bare IP. Missing ports default to <code>:5555</code>.</p>
+      <textarea id="importCsv" rows="9" placeholder="phone-01,192.168.1.101&#10;phone-02,192.168.1.102:5555"></textarea>
+      <label class="toggle-row"><input id="importReplace" type="checkbox"> <span>Replace the existing configured list</span></label>
+      <div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button class="button primary" id="importSubmit" value="default">Import devices</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="shellDlg" class="wide-dialog">
+    <form method="dialog" id="shellForm">
+      <div class="dialog-heading"><div><span class="eyebrow">REMOTE COMMAND</span><h2>Run shell command</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p>Runs through ADB shell on eligible selected devices. Do not automate the attested processor UI.</p>
+      <label for="shellCommand">Command</label><input id="shellCommand" type="text" placeholder="dumpsys battery | grep level" autocomplete="off">
+      <div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button class="button primary" id="shellSubmit" value="default">Run command</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="resultsDlg" class="results-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">ACTION RESULTS</span><h2 id="resultsTitle">Results</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <div id="resultsBody" class="results-body"></div>
+    </form>
+  </dialog>
+
+  <dialog id="screenDlg" class="screen-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">REMOTE SCREEN</span><h2 id="screenTitle">Screenshot</h2></div><div class="button-row"><button id="screenRefresh" class="button" type="button">Refresh</button><button class="icon-button" value="cancel" aria-label="Close">×</button></div></div>
+      <div id="screenBody" class="screen-body"><div class="loading-orbit"></div></div>
+    </form>
+  </dialog>
+
+  <dialog id="wallDlg" class="wall-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">FLEET CAPTURE</span><h2 id="wallTitle">Screenshot wall</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <div id="wallBody" class="screenshot-wall"></div>
+    </form>
+  </dialog>
+
+  <dialog id="onboardDlg" class="wide-dialog operation-dialog">
+    <form method="dialog" id="onboardForm">
+      <div class="dialog-heading"><div><span class="eyebrow">WIRELESS ADB ONBOARDING</span><h2>Onboard a new phone</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p>On the phone, open <strong>Developer options → Wireless debugging → Pair device with pairing code</strong>. Select the matching host or enter it manually.</p>
+      <div class="dialog-toolbar"><span>Phones waiting to pair</span><button class="button" type="button" data-action="pairing-refresh">Refresh scan</button></div>
+      <div id="pairingList" class="pairing-list"><div class="drawer-empty">Scanning for pairing-mode phones…</div></div>
+      <div class="form-grid"><label>Pairing host<input id="pairingHost" type="text" placeholder="192.168.1.41:37123" autocomplete="off"></label><label>Six-digit code<input id="pairingCode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" autocomplete="one-time-code"></label></div>
+      <label class="toggle-row"><input id="onboardFull" type="checkbox" checked> <span>Install Guardian and provision automatically after pairing</span></label>
+      <pre id="onboardLog" class="operation-log" hidden></pre>
+      <div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button id="onboardSubmit" class="button primary" value="default">Pair and onboard</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="debloatDlg" class="debloat-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">REVERSIBLE · USER 0 ONLY</span><h2>Fleet debloat</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p>Disables OEM bloat without root. The work profile is never touched, and the backend guard refuses protected packages that could break ADB, attestation, or earning.</p>
+      <div class="debloat-controls"><label>Method<select id="debloatMethod"><option value="disable">disable-user</option><option value="uninstall">uninstall -k</option></select></label><label>Target<select id="debloatTarget"><option value="online">All reporting online</option><option value="selected">Selected devices</option></select></label><label class="opt-inline">View
+        <select id="debloatView" title="Safe to wave = flagged as a good candidate AND present on every phone in the variant. Anything less is firmware-specific and must be curated per build.">
+          <option value="safe">Safe to wave (recommended)</option>
+          <option value="candidates">All candidates</option>
+          <option value="all">Everything, including protected</option>
+        </select>
+      </label><button class="button" type="button" data-action="debloat-refresh">Refresh report</button><button class="button" type="button" data-action="debloat-select-all" title="Tick every package currently shown, across all variants">Select all shown</button><button class="button" type="button" data-action="debloat-select-none" title="Clear the package selection">Clear</button><strong id="debloatSelectedCount">0 selected</strong></div>
+      <div id="debloatStatus" class="operation-status">Inventory has not been loaded.</div>
+      <div id="debloatReport" class="debloat-report"></div>
+      <div id="debloatProgress" class="operation-status"></div>
+      <div class="dialog-actions"><button class="button" type="button" data-action="debloat-restore">Restore recorded</button><button class="button" type="button" data-action="debloat-preview">Preview guard</button><button class="button danger" type="button" data-action="debloat-apply">Apply selected</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="analyticsDlg" class="analytics-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">THERMAL OBSERVABILITY</span><h2 id="analyticsTitle">Fleet analytics</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <div class="analytics-ranges" role="tablist" aria-label="Analytics range"><button class="active" type="button" role="tab" aria-selected="true" aria-controls="analyticsBody" tabindex="0" data-analytics-hours="6">6h</button><button type="button" role="tab" aria-selected="false" aria-controls="analyticsBody" tabindex="-1" data-analytics-hours="24">24h</button><button type="button" role="tab" aria-selected="false" aria-controls="analyticsBody" tabindex="-1" data-analytics-hours="72">3d</button><button type="button" role="tab" aria-selected="false" aria-controls="analyticsBody" tabindex="-1" data-analytics-hours="168">7d</button></div>
+      <div id="analyticsBody" class="analytics-body" role="tabpanel"><div class="loading-orbit"></div></div>
+    </form>
+  </dialog>
+
+  <dialog id="readinessDlg" class="wide-dialog operation-dialog">
+    <form method="dialog"><div class="dialog-heading"><div><span class="eyebrow">GUARDIAN READINESS</span><h2>Grant drift details</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div><div id="readinessBody"></div><div class="dialog-actions"><button class="button primary" value="cancel">Done</button></div></form>
+  </dialog>
+
+  <dialog id="renameDlg" class="wide-dialog operation-dialog">
+    <form method="dialog" id="renameForm"><div class="dialog-heading"><div><span class="eyebrow">DEVICE IDENTITY</span><h2>Rename device</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div><input id="renameSerial" type="hidden"><label for="renameAlias">Fleet alias</label><input id="renameAlias" type="text" placeholder="Blank restores the backend label"><div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button class="button primary" value="default">Save alias</button></div></form>
+  </dialog>
+
+  <dialog id="paletteDlg" class="palette-dialog" aria-label="Command palette">
+    <div class="palette-head">
+      <span class="palette-glyph" aria-hidden="true">⌕</span>
+      <input id="paletteInput" type="text" role="combobox" aria-expanded="true" aria-controls="paletteList" aria-autocomplete="list" placeholder="Search devices and commands…" autocomplete="off" spellcheck="false">
+      <kbd>esc</kbd>
+    </div>
+    <div id="paletteList" class="palette-list" role="listbox" aria-label="Command results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>⏎</kbd> run</span><span id="paletteCount"></span></div>
+  </dialog>
+
+  <dialog id="shortcutsDlg" class="wide-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">KEYBOARD</span><h2>Shortcuts</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <dl class="shortcut-list">
+        <div><dt><kbd>⌘</kbd><kbd>K</kbd> <span>/</span> <kbd>Ctrl</kbd><kbd>K</kbd></dt><dd>Open the command palette — jump to any device or run a fleet command</dd></div>
+        <div><dt><kbd>/</kbd></dt><dd>Focus the fleet search box</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>Open this shortcuts panel</dd></div>
+        <div><dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>Move through palette results</dd></div>
+        <div><dt><kbd>←</kbd><kbd>→</kbd></dt><dd>Move between tabs in a segmented control</dd></div>
+        <div><dt><kbd>⏎</kbd> <span>/</span> <kbd>Space</kbd></dt><dd>Open details for the focused device row</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Close the drawer, palette, or any open dialog</dd></div>
+      </dl>
+      <p class="panel-note">Destructive actions always route through their confirmation step, including from the palette.</p>
+      <div class="dialog-actions"><button class="button primary" value="cancel">Done</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="optionsDlg" class="wide-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">CONSOLE OPTIONS</span><h2>What this console shows you</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+
+      <div class="opt-section">
+        <h3>Status cards</h3>
+        <p class="opt-note"><strong>Tip:</strong> you can also drag a card straight from the summary strip up into the hero row to pin it, drag one card onto another to reorder, or drag a hero card down to the strip to demote it. Your arrangement is saved. The checkboxes below do the same thing from the keyboard.</p>
+        <p class="opt-note"><strong>Why does the hero row change on its own?</strong> With focus mode on, any card that turns red or amber is raised into the hero row automatically and drops back out when it clears — those are marked with a dashed edge. Cards <em>you</em> pinned or demoted never move. Turn focus mode off below for a layout that only ever changes when you change it.</p>
+        <p class="opt-note">There are 17 status cards. Most read nominal most of the time, which buries the one or two that don't. Focus mode keeps exceptions full-size and folds the healthy ones into a single line — nothing is hidden, it just stops competing.</p>
+        <label class="toggle-row"><input id="optFocusMode" type="checkbox"> <span><strong>Focus mode</strong> — automatically raise cards that need attention, and collapse the rest to a summary line. Re-evaluated on every refresh, so the hero row changes as the fleet changes.</span></label>
+        <div class="opt-cards-head"><span>Or choose individually</span><button class="button" type="button" data-action="opt-cards-all">Show all</button><button class="button" type="button" data-action="opt-cards-none">Hide all</button></div>
+        <div id="optCardList" class="opt-cards"></div>
+      </div>
+
+      <div class="opt-section">
+        <h3>Refresh</h3>
+        <label class="toggle-row"><input id="optAutoRefresh" type="checkbox" checked> <span>Auto-refresh</span></label>
+        <label class="opt-inline">Every
+          <select id="optRefreshMs">
+            <option value="2000">2 seconds</option>
+            <option value="4000">4 seconds (default)</option>
+            <option value="10000">10 seconds</option>
+            <option value="30000">30 seconds</option>
+            <option value="60000">60 seconds</option>
+          </select>
+          <em class="opt-note-inline">Slower polling is gentler on the phones — each refresh is ADB work across the fleet.</em>
+        </label>
+      </div>
+
+      <div class="opt-section">
+        <h3>Layout</h3>
+        <label class="toggle-row"><input id="optCompact" type="checkbox"> <span><strong>Compact rows</strong> — ~35% more devices per screen, drops the secondary line in each cell</span></label>
+        <label class="toggle-row"><input id="optReduceMotion" type="checkbox"> <span><strong>Reduce motion</strong> — disable animated transitions</span></label>
+        <label class="opt-inline">Default view
+          <select id="optDefaultView"><option value="table">Table</option><option value="grid">Cards</option></select>
+        </label>
+      </div>
+
+      <div class="opt-section">
+        <h3>Server settings</h3>
+        <p class="opt-note">Everything above is stored in <em>your browser</em> and only changes what you see. Server settings — which processor this console manages, Guardian OTA, Pulse health, secrets — live in <code>devices.json</code> on the console host and apply to everyone.</p>
+        <button class="button" type="button" data-action="open-setup">Open server settings…</button>
+      </div>
+
+      <div class="dialog-actions"><button class="button" type="button" data-action="opt-reset">Reset to defaults</button><button class="button primary" value="cancel">Done</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="setupDlg" class="wide-dialog operation-dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">SERVER SETTINGS</span><h2>Console configuration</h2></div><button class="icon-button" type="button" data-action="setup-close" aria-label="Close">×</button></div>
+    <p class="opt-note">These apply to everyone using this console, and take effect as soon as you save — no restart.</p>
+    <div id="setupBody" class="setup-body"><div class="drawer-empty">Loading…</div></div>
+    <div class="dialog-actions">
+      <span id="setupMsg" class="setup-msg"></span>
+      <button class="button" type="button" data-action="setup-close">Cancel</button>
+      <button class="button primary" type="button" data-action="setup-save">Save changes</button>
+    </div>
+  </dialog>
+
+  <dialog id="mapGroupsDlg" class="wide-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">FLEET MAP</span><h2>Custom groups</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p class="opt-note">Select devices in the table (or shift-click them on the map), then assign them to a named group. Groups are stored in this browser and drive the map's layout when "Custom groups" is the grouping mode.</p>
+      <div class="opt-inline">
+        <input id="mapGroupName" type="text" placeholder="Group name, e.g. rack-a" autocomplete="off">
+        <button class="button primary" type="button" data-action="map-group-assign">Assign selected</button>
+        <button class="button" type="button" data-action="map-group-clear-sel">Ungroup selected</button>
+      </div>
+      <div id="mapGroupList" class="opt-cards"></div>
+      <div class="dialog-actions"><button class="button" type="button" data-action="map-groups-reset">Clear all groups</button><button class="button primary" value="cancel">Done</button></div>
+    </form>
+  </dialog>
+
+  <script src="/fleet-utils.js"></script>
+  <script src="/fleet-console.js"></script>
+</body>
+</html>
