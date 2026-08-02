@@ -63,6 +63,27 @@ After first run you can configure most settings **from the UI** instead of editi
 **⚙ Options → Open server settings** (token-gated; hot-reloads, no restart). `token`, `bind`, and
 `port` are deliberately not editable there — a browser that could rewrite them could lock you out.
 
+## Add a phone (wireless ADB, ~1 min)
+
+Turn it on, pair once, and the console does the rest — it auto-connects, and re-connects after reboots.
+Requires Android 11+ and the console machine being able to reach the phone (same LAN, or your VPN/tailnet).
+
+**On the phone** (one-time):
+1. **Settings → Developer options → Wireless debugging → ON.**
+2. Tap **Pair device with pairing code.** It shows an **IP:port** and a **6-digit code** — leave it open.
+
+**In the console:**
+3. Click **Onboard phone**.
+4. Click **Refresh scan** — the phone appears under **"Phones waiting to pair"**; click it (it fills in
+   the host). *Or type the IP:port the phone is showing.*
+5. Enter the **6-digit code** → **Pair.**
+
+That's it. The phone appears on the grid, and everything after — health, reboots, screenshots, live
+control, Guardian install/provision — is driven from the console.
+
+> It's forgiving about the port: paste just the IP, or either port (connect *or* pairing) — it
+> auto-resolves the correct `_adb-tls-pairing` port from mDNS.
+
 ### Point the Pulse Guardian app at this console (telemetry)
 In the Guardian app's telemetry setting, set the URL to `http://<your-console>:<port>/api/telemetry`.
 The console ingests it (unauthenticated ingest — it only stores health), keyed by the phone's Wi-Fi IP,
