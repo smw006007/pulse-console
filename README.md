@@ -5,6 +5,20 @@ wireless ADB — live device grid, health telemetry, reboots (staggered in waves
 screen control (via scrcpy / ws-scrcpy), Guardian APK updates, and arbitrary `adb shell` actions.
 Python stdlib only, no pip installs.
 
+## Screenshots
+
+> Illustrative — mock/sample devices, not a real fleet.
+
+**Dashboard** — fleet health, verified Lite OTA state, the operational map, and a per-node table with
+compute/earning, temperature, battery, Guardian state, and version:
+
+![Pulse Console dashboard](screenshots/dashboard.png)
+
+**Add a phone** — pair over wireless ADB in one step; the console scans for phones already in pairing
+mode, then auto-connects:
+
+![Onboard a phone over wireless ADB](screenshots/onboard.png)
+
 ---
 
 ## ⚠️ NO SUPPORT — AT ALL
