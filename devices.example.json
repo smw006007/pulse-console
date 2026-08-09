@@ -10,6 +10,11 @@
   "batch": { "wave_size": 8, "wave_delay_sec": 20 },
   "ws_scrcpy_url": "",
 
+  "_polling_comment": "thermal_poll_seconds: how often battery/temperature is sampled. metrics_retention_days: how long those samples are kept in the local db. auto_open_on_reconnect: relaunch the processor app whenever a device comes back — leave false unless you know you want it.",
+  "thermal_poll_seconds": 45,
+  "metrics_retention_days": 7,
+  "auto_open_on_reconnect": false,
+
   "acurast_backend": {
     "base_url": "",
     "api_key": "",
@@ -33,12 +38,33 @@
   "_command_channel_comment": "Signed readb/locate channel. Set the SAME value here and in the app (ENABLE_PROTECTION --es command_secret <same>). Blank = channel off. Also flip READB_ENABLED in fleet.py after your own operator-present test.",
   "guardian_command_secret": "",
 
+  "_updates_comment": "Processor (Lite) OTA. enabled:false means the console only reports which version each phone runs; turn it on to let it download and install releases. expected_cert_sha256 is the signing cert the APK must match — set it from a release you have verified yourself, and an APK that does not match is refused.",
+  "updates": {
+    "enabled": false,
+    "repo": "Acurast/acurast-processor-update",
+    "package": "com.acurast.attested.executor.sbs.canary",
+    "expected_cert_sha256": "",
+    "include_prereleases": false,
+    "auto_download": true,
+    "poll_minutes": 60,
+    "wave_size": 4,
+    "wave_delay_sec": 20
+  },
+
+  "_guardian_update_comment": "Guardian APK rollout. keep_lite_foreground periodically nudges the processor back to the foreground if something stole it. opportunistic_update installs the target version ONLY on phones that are idle — installing on a phone holding a job can cost it that job, so it waits. Both default off here; batch/interval control how gently the rollout proceeds.",
   "guardian_update": {
     "repo": "",
     "github_token": "",
     "package": "com.acurast.pulse.guardian",
     "cache_dir": "guardian-apks",
-    "telemetry_url": ""
+    "telemetry_url": "",
+    "batch": { "wave_size": 6, "wave_delay_sec": 15 },
+    "keep_lite_foreground": false,
+    "keep_lite_interval_sec": 300,
+    "opportunistic_update": false,
+    "opportunistic_interval_sec": 600,
+    "opportunistic_batch": 3,
+    "opportunistic_tag": "latest"
   },
 
   "devices": []

@@ -1,6 +1,24 @@
 __pycache__/
 *.pyc
+
+# your config — holds the token, the guardian command secret and (optionally) a GitHub PAT
 devices.json
-guardian-apks/
+
+# runtime state and caches: regenerated on demand, machine-specific, or large
 *.db
+*.db-*
+packages_cache.json
+device_state.json
+discovery_baseline.json
+screensaver.json
+fleet.log
+apk-cache/
+guardian-apks/
+
+# signing material — never commit
 release-keystore.jks
+
+# local backups
+*.bak
+*.bak-*
+static/*.bak*

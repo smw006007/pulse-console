@@ -342,7 +342,7 @@
       "Up but stalled": "Reports 'Running' but the heartbeat has gone stale -- the node looks alive and is earning nothing.",
       "App ANRs": "Phones where the Processor's main thread has wedged long enough for Android to raise 'App isn't responding'. Guardian dismisses the dialog so the node recovers, which is exactly why this never shows up as lost earnings.",
       "Idle hub": "Phones sitting on the wallet/hub screen with 'Open Processor to Provide Compute' showing. The node is NOT computing. Detected from the foreground user over ADB, independently of Guardian.",
-      "Computing": "Phones actively reporting compute out of those reporting telemetry at all.",
+      "On jobs": "Phones currently running a deployment, out of those reporting telemetry at all. A phone with no job is still online, attested and heartbeating — the network simply has not assigned it work. Assignments are sticky, so a phone that loses one waits for a new deployment rather than reclaiming the old.",
       "Average battery": "Mean charge across reporting phones. These run on AC, so a falling average points at cabling or battery health.",
       "Update compliance": "Phones on the current Processor build.",
       "Hottest device": "Highest temperature currently reported.",
@@ -396,7 +396,7 @@
       // and still scraping compute, so the flag alone is not trustworthy. If compute fields are
       // still arriving, the accessibility service is alive whatever the flag says.
       { label: "Scrape dead", value: m.devices.filter(scrapeDead).length, context: m.devices.filter(scrapeDead).length ? `Unbound >${A11Y_DEAD_MIN}m — re-bind is not taking; reboot these` : (m.devices.filter(scrapeFlapping).length ? `${m.devices.filter(scrapeFlapping).length} re-binding after an OTA (normal, self-heals)` : "Accessibility service bound everywhere reporting it"), tone: m.devices.filter(scrapeDead).length ? "red" : "green", icon: "\u2717", query: "a11y:dead" },
-      { label: "Up but stalled", value: stalledDevices.length, context: stalledDevices.length ? "Running, but heartbeat stale — earning nothing" : "All computing phones have a fresh heartbeat", tone: stalledDevices.length ? "red" : "green", icon: "\u25D1", query: "stalled:true" },
+      { label: "Up but stalled", value: stalledDevices.length, context: stalledDevices.length ? "Running, but heartbeat stale — earning nothing" : "Every phone on a job has a fresh heartbeat", tone: stalledDevices.length ? "red" : "green", icon: "\u25D1", query: "stalled:true" },
       // The canary runs two instances of the SAME package: a user-0 hub (the "Open Processor
       // to Provide Compute" screen) and the work-profile Processor that actually earns.
       // Guardian's targetOnTop matches on package NAME only, so it reads true for either --
@@ -407,7 +407,7 @@
       // dismisses each dialog and earning never dips.
       { label: "App ANRs", value: anrDevices.length, context: anrDevices.length ? `${anrTotal} total since boot \u00b7 app main thread wedging` : "No device has ANR'd since boot", tone: anrDevices.length ? "amber" : "green", icon: "\u26A0", query: "anr:>0" },
       { label: "Idle hub", value: idleHubDevices.length, context: idleHubDevices.length ? "On the user-0 hub \u2014 NOT computing" : (idleHubUnknown.length ? `No idle nodes \u00b7 ${idleHubUnknown.length} foreground unreadable` : "No node is sitting on the idle hub"), tone: idleHubDevices.length ? "red" : "green", icon: "\u25D3", query: "idle:true" },
-      { label: "Computing", value: computeReporting.length ? `${computeActive.length}/${computeReporting.length}` : "—", context: !computeReporting.length ? "Needs Guardian v1.1.20+" : computeActive.length === computeReporting.length ? "All reporting phones are computing" : `${computeReporting.length - computeActive.length} not computing`, tone: !computeReporting.length ? "neutral" : computeActive.length === computeReporting.length ? "green" : "amber", icon: "\u25B6" },
+      { label: "On jobs", value: computeReporting.length ? `${computeActive.length}/${computeReporting.length}` : "—", context: !computeReporting.length ? "Needs Guardian v1.1.20+" : computeActive.length === computeReporting.length ? "Every reporting phone has a job" : `${computeReporting.length - computeActive.length} idle \u2014 no job assigned, not a fault`, tone: !computeReporting.length ? "neutral" : computeActive.length === computeReporting.length ? "green" : "amber", icon: "\u25B6" },
       { label: "Average battery", value: m.averageBattery == null ? "—" : `${Math.round(m.averageBattery)}%`, context: m.averageBattery == null ? "Not reported by backend" : `${m.batteryDevices.length} devices reporting`, tone: m.averageBattery != null && m.averageBattery < 35 ? "amber" : "teal", icon: "▰", query: "battery:<30" },
       { label: "Update compliance", value: total ? `${Math.round((total - (app.data.updateCount || 0)) / total * 100)}%` : "—", context: app.data.release && app.data.release.versionName ? `${app.data.updateCount || 0} need Lite ${app.data.release.versionName}` : `${app.data.behindCount || 0} behind latest observed`, tone: (app.data.updateCount || app.data.behindCount) ? "amber" : "green", icon: "↧", query: app.data.release && app.data.release.versionName ? "update:true" : "outdated:true" },
     ];
@@ -977,6 +977,7 @@ Click to open \u00b7 Shift-click to select`;
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Operations</h3><div class="button-row"><button class="button" data-device-action="rename" data-serial="${escapeAttr(serial)}">Rename</button>${device.address ? `<button class="button" data-device-action="pulse" data-serial="${escapeAttr(serial)}">Pulse ↗</button>` : ""}</div></div>
       <div class="drawer-action-group"><span class="drawer-action-label">Diagnostics</span><div class="drawer-actions"><button class="button" data-device-action="screenshot" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Screenshot</button><button class="button" data-device-action="live" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Live screen</button><button class="button" data-device-action="logcat" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Logcat</button><button class="button" data-device-action="shell-one" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Shell</button></div></div>
       <div class="drawer-action-group"><span class="drawer-action-label">Control</span><div class="drawer-actions"><button class="button" data-device-action="wake" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Wake</button><button class="button" data-device-action="open_acurast" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Open Acurast</button><button class="button" data-device-action="provision" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Provision</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Update Lite</button>` : ""}<button class="button" data-device-action="reset-fg" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reset FG</button><button class="button" data-device-action="locate" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>📍 Locate</button><button class="button" data-device-action="locate-stop" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Stop</button></div></div>
+      <div class="drawer-action-group"><span class="drawer-action-label">Maintenance</span><div class="drawer-actions"><button class="button" data-device-action="pause-15" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for 15 minutes so you can use the phone">⏸ Pause 15m</button><button class="button" data-device-action="pause-60" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for an hour">⏸ Pause 60m</button><button class="button" data-device-action="resume" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="End the maintenance window now">▶ Resume</button></div></div>
       <div class="drawer-danger" role="group" aria-label="Destructive operations"><span class="drawer-danger-label">Danger zone</span>
         <div class="drawer-danger-row"><div><strong>Reboot device</strong><small>Disconnects wireless ADB and stops earning until Guardian restores connectivity.</small></div><button class="button danger" data-device-action="reboot" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reboot</button></div>
         <div class="drawer-danger-row"><div><strong>Forget device</strong><small>Removes it from the fleet and drops its ADB transport. Requires typing FORGET.</small></div><button class="button danger" data-device-action="forget" data-serial="${escapeAttr(serial)}">Forget</button></div>
@@ -1249,7 +1250,10 @@ function computeBadge(device) {
     const stalled = earning === false && active === true;
     const cls = stalled ? "compute-stalled" : active === true ? "compute-on" : "compute-off";
     const dot = stalled ? "\u25D1" : active === true ? "\u25CF" : "\u25CB";
-    const label = stalled ? "Stalled" : active === true ? (earning === false ? "Active" : "Active") : (status ? String(status) : "Inactive");
+    // "NoDeployments" is the chain's word for "nothing assigned right now" — an ordinary state, not
+    // a fault, so it must not read like one. A phone with no job is still Active and heartbeating.
+    const noJob = status === "NoDeployments" || active === false;
+    const label = stalled ? "Stalled" : active === true ? "On job" : noJob ? "No job" : (status ? String(status) : "Inactive");
     const bits = [status ? `Compute status: ${status}` : "Compute status unknown"];
     if (earning !== undefined) bits.push(`earning: ${earning}`);
     if (hbAge !== undefined && hbAge !== null) bits.push(`heartbeat ${hbAge}m ago`);
@@ -1383,6 +1387,9 @@ function computeBadge(device) {
     if (action === "update") return updateOne(serial);
     if (action === "provision") return provisionDevices([serial], false);
     if (action === "reset-fg") return resetForegroundLosses([serial], false);
+    if (action === "pause-15") return pauseDevice(serial, 15);
+    if (action === "pause-60") return pauseDevice(serial, 60);
+    if (action === "resume") return resumeDevice(serial);
     if (action === "locate") return locateDevice(serial);
     if (action === "locate-stop") return stopLocateDevice(serial);
     if (action === "rename") return openRename(serial);
@@ -1530,6 +1537,32 @@ function computeBadge(device) {
       toast("Locate stopped", `${device ? displayName(device) : serial} beacon silenced.`);
       recordAction("Locate beacon stopped", [device].filter(Boolean));
     } catch (error) { toast("Stop failed", error.message, "error"); }
+  }
+
+  // Guardian v1.1.46+ only; older builds ignore the broadcast and the result reports ok:false,
+  // which is why the toast names the phone rather than claiming a fleet-wide success.
+  async function pauseDevice(serial, minutes) {
+    const device = app.devicesById.get(serial);
+    try {
+      const result = await api("/api/guardian/maintenance", { serials: [serial], enter: true, minutes });
+      if (!result.ok) throw new Error(result.message || "Pause failed");
+      if (!result.applied) throw new Error("Guardian did not confirm — is this phone on v1.1.46+?");
+      toast("Maintenance on", `${device ? displayName(device) : serial} paused for ${minutes} min. Recovery will not fight you.`);
+      recordAction(`Maintenance ${minutes}m`, [device].filter(Boolean));
+      await poll();
+    } catch (error) { toast("Pause failed", error.message, "error"); }
+  }
+
+  async function resumeDevice(serial) {
+    const device = app.devicesById.get(serial);
+    try {
+      const result = await api("/api/guardian/maintenance", { serials: [serial], enter: false });
+      if (!result.ok) throw new Error(result.message || "Resume failed");
+      if (!result.applied) throw new Error("Guardian did not confirm — is this phone on v1.1.46+?");
+      toast("Protection resumed", `${device ? displayName(device) : serial} is protecting again.`);
+      recordAction("Maintenance ended", [device].filter(Boolean));
+      await poll();
+    } catch (error) { toast("Resume failed", error.message, "error"); }
   }
 
   async function toggleScreensaver() {
@@ -2090,6 +2123,8 @@ function computeBadge(device) {
     { verb: "Live screen", action: "live", needsOnline: true },
     { verb: "Logcat", action: "logcat", needsOnline: true },
     { verb: "Locate", action: "locate", needsOnline: true },
+    { verb: "Pause 15m (maintenance)", action: "pause-15", needsOnline: true },
+    { verb: "Resume protection", action: "resume", needsOnline: true },
     { verb: "Reboot", action: "reboot", needsOnline: true, danger: true },
   ];
   let paletteRows = [];

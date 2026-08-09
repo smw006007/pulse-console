@@ -228,6 +228,7 @@ load_device_state()
 # Guardian health telemetry, keyed by the device's reported Wi-Fi IP. Merged into cards by IP.
 TELEMETRY = {}
 TELEMETRY_TTL = 600  # seconds a telemetry sample stays "fresh"
+GUARDIAN_SCAN_INTERVAL = 1800  # how often to re-read each phone's installed Guardian version
 SERIAL_IP = {}  # guid serial -> device Wi-Fi IP (from mDNS) so telemetry (keyed by IP) attaches
 
 # --- Guardian readb command channel (v1.1.12+); see READB-COMMAND-CHANNEL.md -------------------
@@ -417,6 +418,8 @@ def refresh_devices():
             if model:
                 d["model"] = model
             d["last_seen"] = now
+            if state == "device":
+                LAST_ONLINE[serial] = now
             if state == "device" and prev != "device":
                 newly_online.append(serial)  # offline→online transition (e.g. post-reboot)
                 if d.get("action") == "rebooting":
@@ -1110,7 +1113,7 @@ def fetch_manager_processors(base, manager):
     return out
 
 
-MANAGER_ADDRS = []                    # cached manager (mgr 868) processor address list
+MANAGER_ADDRS = []                    # cached manager processor address list
 MANAGER_ADDRS_LOCK = threading.Lock()
 
 
@@ -1180,6 +1183,7 @@ def acurast_loop():
 
 
 def version_loop():
+    last_guardian = 0.0
     while True:
         time.sleep(90)
         try:
@@ -1187,11 +1191,23 @@ def version_loop():
                 online = [s for s, d in STATE.items() if d.get("state") == "device"]
             scan_versions(online)
             scan_addresses(online)  # read each processor's on-chain address from logcat
+            # guardianVersion is otherwise only written on arm/provision or a manual
+            # /api/guardian/scan, so a phone updated out-of-band reports its old build forever.
+            if time.time() - last_guardian >= GUARDIAN_SCAN_INTERVAL:
+                scan_guardians(online)
+                last_guardian = time.time()
         except Exception as e:  # noqa: BLE001
             print(f"[version] {e}")
 
 
-def reboot(serial):
+def reboot(serial, force=False):
+    # A phone in a maintenance window has had recovery paused deliberately by an operator. Rebooting
+    # into that window costs them the rest of it: Guardian restores the window on boot, stays
+    # correctly paused, and therefore never launches Lite, so the phone does not earn until expiry
+    # (measured 2026-08-08 on v1.1.45). Windows stay sacred unless the caller says otherwise —
+    # send EXIT_MAINTENANCE first, or pass force=True, when the reboot genuinely must win.
+    if not force and _in_maintenance(serial):
+        return False, "skipped: phone is in maintenance mode (exit maintenance first, or pass force)"
     with STATE_LOCK:
         if serial in STATE:
             STATE[serial]["action"] = "rebooting"
@@ -1200,15 +1216,24 @@ def reboot(serial):
     return code == 0, (out or err)
 
 
-def reboot_batch(serials, wave_size, wave_delay):
+def reboot_batch(serials, wave_size, wave_delay, force=False):
+    # Pre-filter so the caller gets immediate feedback about what will not be rebooted; each phone is
+    # re-checked at reboot time too, so one that enters maintenance mid-batch is still protected.
+    skipped = [] if force else [s for s in serials if _in_maintenance(s)]
+    targets = [s for s in serials if s not in skipped]
+    if skipped:
+        print(f"[reboot] skipped {len(skipped)} phone(s) in maintenance mode: "
+              f"{[s[4:18] for s in skipped]}")
+
     def worker():
-        for i in range(0, len(serials), wave_size):
-            wave = serials[i:i + wave_size]
+        for i in range(0, len(targets), wave_size):
+            wave = targets[i:i + wave_size]
             for s in wave:
-                reboot(s)
-            if i + wave_size < len(serials):
+                reboot(s, force=force)
+            if i + wave_size < len(targets):
                 time.sleep(max(1, wave_delay))
     threading.Thread(target=worker, daemon=True).start()
+    return skipped
 
 
 def poll_loop():
@@ -1240,6 +1265,12 @@ def _capture_png(serial):
     return None
 
 
+# Empirical split on this fleet (720x1440 and 720x1600 panels): a screensaver frame lands at
+# 15-22 KB, a rendered Lite screen at 85-102 KB. 45 KB sits clear of both, and the cost of being
+# wrong either way is one extra capture.
+SCREENSAVER_BLANK_MAX_BYTES = 45_000
+
+
 def screenshot_png(serial):
     """Silent screenshot via adb (shell uid — no MediaProjection consent needed). Returns PNG bytes.
 
@@ -1249,8 +1280,17 @@ def screenshot_png(serial):
     deterministic, and safer than injecting a "tap to peek" that could land on Lite's UI."""
     with SCREENSAVER_LOCK:
         peek = bool(SCREENSAVER.get("enabled"))
+
     if not peek:
-        return _capture_png(serial)
+        # The flag says no overlay — but trust the frame, not the flag. A screensaver frame is
+        # near-black and compresses to a fraction of a real UI capture, so a suspiciously small
+        # PNG means the overlay is up regardless of what the console believes.
+        png = _capture_png(serial)
+        if not png or len(png) >= SCREENSAVER_BLANK_MAX_BYTES:
+            return png
+        print(f"[screenshot] {serial[4:18]} looks like a screensaver frame "
+              f"({len(png)} B) — dropping the overlay and retrying")
+
     screensaver_one(serial, False)
     try:
         time.sleep(0.4)          # let the overlay tear down before grabbing the frame
@@ -1298,7 +1338,8 @@ SCRCPY_PORT_HEX = ":22B6"   # 8886, as it appears in /proc/net/tcp
 # ws-scrcpy pushes this itself only on a device it has already streamed, so freshly-onboarded phones
 # arrive without it and live view fails outright ("Aborted"). Push it at provision time instead —
 # this has silently broken live view on two separate batches of new phones.
-SCRCPY_JAR_SRC = "/home/acurast/ws-scrcpy/dist/vendor/Genymobile/scrcpy/scrcpy-server.jar"
+SCRCPY_JAR_SRC = os.path.expanduser(
+    "~/ws-scrcpy/dist/vendor/Genymobile/scrcpy/scrcpy-server.jar")
 
 
 def ensure_scrcpy_jar(serial):
@@ -1972,6 +2013,10 @@ GUARDIAN_ARM_ACTION = "com.acurast.guardian.action.ENABLE_PROTECTION"
 GUARDIAN_RESET_FG_ACTION = "com.acurast.guardian.action.RESET_FG_LOSSES"  # v1.1.10+
 GUARDIAN_LOCATE_ACTION = "com.acurast.guardian.action.LOCATE"            # v1.1.13+ find-my-phone
 GUARDIAN_LOCATE_STOP_ACTION = "com.acurast.guardian.action.LOCATE_STOP"
+# v1.1.46+. Older builds simply ignore the broadcast, so a mixed fleet degrades to "no effect"
+# rather than erroring — the per-device result carries the truth either way.
+GUARDIAN_MAINT_ENTER_ACTION = "com.acurast.guardian.action.ENTER_MAINTENANCE"
+GUARDIAN_MAINT_EXIT_ACTION = "com.acurast.guardian.action.EXIT_MAINTENANCE"
 GUARDIAN_HEARTBEAT_ACTION = "com.acurast.guardian.action.HEARTBEAT"  # forces an immediate telemetry push
 GUARDIAN_SCREENSAVER_ON_ACTION = "com.acurast.guardian.action.SCREENSAVER_ON"    # v1.1.21+
 GUARDIAN_SCREENSAVER_OFF_ACTION = "com.acurast.guardian.action.SCREENSAVER_OFF"
@@ -2053,6 +2098,22 @@ def locate_stop_one(serial):
             "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_STOP_ACTION]
     _, out, err = adb(args, timeout=15)
     return {"serial": serial, "ok": "locate_stopped" in (out + " " + err), "output": (out + " " + err).strip()[:120]}
+
+
+def maintenance_one(serial, enter, minutes):
+    """Enter or leave a maintenance window on one phone.
+
+    Guardian answers with data="maintenance_on;min=N" / "maintenance_off"; a build without the
+    feature answers nothing useful, which is what `ok` reflects."""
+    action = GUARDIAN_MAINT_ENTER_ACTION if enter else GUARDIAN_MAINT_EXIT_ACTION
+    args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
+            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", action]
+    if enter:
+        args += ["--ei", "minutes", str(minutes)]
+    _, out, err = adb(args, timeout=15)
+    text = (out + " " + err).strip()
+    ok = ("maintenance_on" in text) if enter else ("maintenance_off" in text)
+    return {"serial": serial, "ok": ok, "output": text[-120:]}
 
 
 def provision_guardian(serial, telemetry_url, friendly_name):
@@ -2340,6 +2401,9 @@ def idle_hub_loop():
 # (so there is effectively nothing to lose), never during an install job, and at
 # most once per DISCOVERY_HEAL_MIN_GAP.
 DISCOVERY_HEAL_ENABLED = True
+DISCOVERY_GAP_AFTER = 900        # a small gap must persist this long before we report it
+DISCOVERY_GAP_LOG_EVERY = 3600   # then re-log at most hourly, so it nags without spamming
+LAST_ONLINE = {}                 # serial -> ts, in memory only (cleared by a console restart)
 DISCOVERY_HEAL_AFTER = 180       # sustained collapse before acting; natural mDNS
                                  # re-announce recovered in ~141s in testing, so give
                                  # it a clear window first. The real failure mode never
@@ -2377,14 +2441,64 @@ def _remember_expected(n):
         print(f"[heal] baseline write failed: {e}")
 
 
+def _ws_scrcpy_boot_check():
+    """Restart ws-scrcpy after a console restart, but ONLY if it is actually stale.
+
+    Restarting this service costs ~90s of downtime (node ignores SIGTERM, so systemd waits out
+    TimeoutStopSec then SIGKILLs), so doing it unconditionally on every console restart means a
+    90s Live outage for nothing. ws-scrcpy is stale exactly when the adb server is YOUNGER than it:
+    that means the server was replaced underneath it and its adbkit tracker is bound to a dead one.
+
+    Waits first because the adb server does not exist yet at startup — poll_loop's first adb call
+    spawns it, inside this unit's cgroup, which is the whole reason it dies with us.
+    """
+    time.sleep(75)
+    try:
+        def age_of_pid(pid):
+            if not pid:
+                return None
+            r = subprocess.run(["ps", "-o", "etimes=", "-p", str(pid)],
+                               capture_output=True, text=True, timeout=15)
+            v = r.stdout.strip()
+            return int(v) if v.isdigit() else None
+
+        # Ask systemd which pid IS ws-scrcpy. `ps -C node` matches every node process on the box
+        # (the home-box backend among them), so taking a max there reports some unrelated 10-day-old
+        # process and this check fires every time — exactly the needless 90s Live outage it exists
+        # to avoid.
+        r = subprocess.run(["systemctl", "show", "ws-scrcpy", "-p", "MainPID", "--value"],
+                           capture_output=True, text=True, timeout=15)
+        ws_pid = r.stdout.strip()
+        ws = age_of_pid(ws_pid if ws_pid.isdigit() and ws_pid != "0" else None)
+
+        r = subprocess.run(["pgrep", "-f", "adb -L tcp:5037 fork-server"],
+                           capture_output=True, text=True, timeout=15)
+        adb_pids = [p for p in r.stdout.split() if p.isdigit()]
+        adb_age = age_of_pid(adb_pids[0]) if adb_pids else None
+        if ws is None or adb_age is None:
+            print(f"[heal] ws-scrcpy boot check skipped (ws={ws} adb={adb_age})")
+            return
+        if adb_age < ws:
+            print(f"[heal] adb server ({adb_age}s) is younger than ws-scrcpy ({ws}s) — "
+                  f"its device tracker is bound to a dead server, restarting it")
+            _restart_ws_scrcpy()
+        else:
+            print(f"[heal] ws-scrcpy ({ws}s) predates nothing — adb server is {adb_age}s, leaving it alone")
+    except Exception as e:  # noqa: BLE001
+        print(f"[heal] ws-scrcpy boot check error: {e}")
+
+
 def _restart_ws_scrcpy():
     """`adb kill-server` is global. ws-scrcpy keeps its own adbkit tracker against the
     adb server and does NOT re-attach when we replace it -- its device list silently
     goes empty and live screen stops working with no error surfaced anywhere. So any
     heal that restarts the adb server must restart ws-scrcpy behind it."""
     try:
-        r = subprocess.run(["sudo", "-n", "systemctl", "restart", "ws-scrcpy"],
-                           capture_output=True, text=True, timeout=30)
+        # --no-block: stopping takes up to TimeoutStopSec (90s here) because node ignores SIGTERM.
+        # Waiting on it just times out the call and logs a misleading failure while the restart is
+        # in fact proceeding.
+        r = subprocess.run(["sudo", "-n", "systemctl", "restart", "--no-block", "ws-scrcpy"],
+                           capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
             print("[heal] ws-scrcpy restarted (it does not survive an adb server replacement)")
         else:
@@ -2406,6 +2520,25 @@ def discovery_heal_loop():
             _remember_expected(online)
             expected = _expected_devices()
             floor = max(2, int(expected * DISCOVERY_HEAL_FLOOR))
+
+            # Small persistent gap: not a collapse, so we report it and change nothing.
+            if expected and online < expected:
+                if not _HEAL.get("gap_since"):
+                    _HEAL["gap_since"] = now
+                elif (now - _HEAL["gap_since"]) > DISCOVERY_GAP_AFTER \
+                        and (now - _HEAL.get("gap_logged", 0)) > DISCOVERY_GAP_LOG_EVERY:
+                    _HEAL["gap_logged"] = now
+                    gone = [x for x, t in LAST_ONLINE.items()
+                            if x not in STATE or STATE.get(x, {}).get("state") != "device"]
+                    print(f"[discovery] {expected - online} phone(s) missing for "
+                          f"{int((now - _HEAL['gap_since']) / 60)} min (online={online} "
+                          f"expected={expected}) - NOT restarting adb; a phone that is still "
+                          f"advertising needs a fresh announce or a readb to be re-claimed"
+                          + (f"; last-seen-online but gone now: {[g[4:18] for g in gone[:6]]}"
+                             if gone else ""))
+            else:
+                _HEAL["gap_since"] = 0
+
             if expected and online < floor:
                 if not _HEAL["low_since"]:
                     _HEAL["low_since"] = now
@@ -2493,6 +2626,100 @@ def telemetry_nudge_loop():
         time.sleep(60)
 
 
+def _in_maintenance(serial):
+    """True if the phone's own fresh telemetry says Guardian is in maintenance mode.
+
+    An operator who deliberately paused recovery must not be fought by the sweeper: re-arming sends
+    ENABLE_PROTECTION, which yanks Lite back to the foreground — exactly what maintenance mode exists
+    to prevent. Unknown/stale telemetry returns False so the sweeper still protects silent phones.
+    """
+    now = time.time()
+    with STATE_LOCK:
+        cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
+        for c in cands:
+            t = TELEMETRY.get(c) if c else None
+            if t and (now - t.get("recv_ts", 0)) < TELEMETRY_TTL:
+                return "MAINTENANCE" in str(t.get("guardianState") or "").upper()
+    return False
+
+
+OPPORTUNISTIC = {
+    "enabled": bool(GUARDIAN_CFG.get("opportunistic_update", False)),
+    "tag": (GUARDIAN_CFG.get("opportunistic_tag") or "latest").strip(),
+    "interval": max(120, int(GUARDIAN_CFG.get("opportunistic_interval_sec", 600))),
+    "batch": max(1, int(GUARDIAN_CFG.get("opportunistic_batch", 3))),
+    "lastRun": 0.0, "installed": 0, "lastInstalled": 0, "lastError": "",
+}
+OPPORTUNISTIC_LOCK = threading.Lock()
+
+
+def _idle_needing_update(target_version):
+    """Online phones that are idle (no deployment to lose) and not yet on the target build.
+
+    Idle is read from the phone's OWN telemetry, so a phone whose telemetry is stale is treated as
+    busy and left alone — the conservative direction. Maintenance windows are skipped too: someone
+    is working on that phone."""
+    out = []
+    now = time.time()
+    with STATE_LOCK:
+        online = [(sv, d) for sv, d in STATE.items() if d.get("state") == "device"]
+    for serial, d in online:
+        if (d.get("guardianVersion") or "") == target_version:
+            continue
+        cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
+        tel = None
+        with STATE_LOCK:
+            for c in cands:
+                t = TELEMETRY.get(c) if c else None
+                if t and (now - t.get("recv_ts", 0)) < TELEMETRY_TTL:
+                    tel = t
+                    break
+        if not tel:
+            continue                                  # unknown state → assume busy
+        if tel.get("computeActive"):
+            continue                                  # has work; leave it alone
+        if "MAINTENANCE" in str(tel.get("guardianState") or "").upper():
+            continue
+        out.append(serial)
+    return out
+
+
+def opportunistic_update_loop():
+    time.sleep(90)   # let the first poll populate telemetry
+    while True:
+        try:
+            with OPPORTUNISTIC_LOCK:
+                enabled = OPPORTUNISTIC["enabled"]
+                interval = OPPORTUNISTIC["interval"]
+                batch = OPPORTUNISTIC["batch"]
+                tag = OPPORTUNISTIC["tag"]
+                last = OPPORTUNISTIC["lastRun"]
+            with GUARDIAN_JOB_LOCK:
+                busy = GUARDIAN_JOB.get("active")
+            if enabled and GUARDIAN_REPO and not busy and (time.time() - last) >= interval:
+                with OPPORTUNISTIC_LOCK:
+                    OPPORTUNISTIC["lastRun"] = time.time()
+                apk_path, rel = ensure_release_apk(tag)          # cached after the first fetch
+                target = (rel.get("versionName") or "").strip() or rel["tag"].lstrip("v")
+                idle = _idle_needing_update(target)[:batch]
+                if idle:
+                    print(f"[opportunistic] {len(idle)} idle phone(s) not on {target} — installing: "
+                          f"{[sv[4:18] for sv in idle]}")
+                    with ThreadPoolExecutor(max_workers=min(len(idle), 4)) as ex:
+                        res = list(ex.map(lambda sv: install_guardian(sv, apk_path), idle))
+                    ok = sum(1 for r in res if r["ok"])
+                    with OPPORTUNISTIC_LOCK:
+                        OPPORTUNISTIC["installed"] += ok
+                        OPPORTUNISTIC["lastInstalled"] = int(time.time())
+                        OPPORTUNISTIC["lastError"] = ""
+                    print(f"[opportunistic] installed {ok}/{len(idle)}")
+        except Exception as e:  # noqa: BLE001
+            with OPPORTUNISTIC_LOCK:
+                OPPORTUNISTIC["lastError"] = str(e)[:200]
+            print(f"[opportunistic] {e}")
+        time.sleep(15)
+
+
 def keep_lite_loop():
     time.sleep(20)  # let the first poll connect + probe the fleet
     while True:
@@ -2506,8 +2733,13 @@ def keep_lite_loop():
                     online = [s for s, d in STATE.items() if d.get("state") == "device"]
                 with ThreadPoolExecutor(max_workers=8) as ex:
                     foc = list(ex.map(lambda s: (s, lite_focused(s)), online))
-                offs = [s for s, f in foc if f is False]
+                drifted = [s for s, f in foc if f is False]
+                paused = [s for s in drifted if _in_maintenance(s)]
+                offs = [s for s in drifted if s not in paused]
                 checked = sum(1 for _, f in foc if f is not None)
+                if paused:
+                    print(f"[keep-lite] left {len(paused)} phone(s) in maintenance mode alone: "
+                          f"{[p[4:18] for p in paused]}")
                 if offs:
                     with ThreadPoolExecutor(max_workers=6) as ex:
                         list(ex.map(foreground_lite, offs))
@@ -2847,6 +3079,12 @@ def snapshot():
             a = ACURAST.get(d.get("address", "")) if d.get("address") else None
         if t and (now - t.get("recv_ts", 0)) < TELEMETRY_TTL:
             d["telemetry"] = t
+            # guardianArmed/guardianVersion are persisted by remember_device() and only rewritten on
+            # arm/provision/scan, so they go stale and can show a protected phone as UNARMED (proven
+            # 2026-08-08: 4 phones read unarmed while their own telemetry reported armed + a live
+            # protection gate). A fresh self-report from the device beats our last-known value.
+            if t.get("armed") is not None:
+                d["guardianArmed"] = bool(t.get("armed"))
             _afs = t.get("a11y_false_since")
             d["a11yFalseMin"] = round((now - _afs) / 60, 1) if _afs else None
         if a and (now - a.get("_recv", 0)) < ACURAST_TTL:
@@ -2943,6 +3181,11 @@ def snapshot():
         "total": len(devices),
         "batch": CFG.get("batch", {"wave_size": 8, "wave_delay_sec": 20}),
         "tokenRequired": bool(CFG.get("token", "")),
+        "discovery": {
+            "expected": _expected_devices(),
+            "online": counts.get("device", 0),
+            "gapSince": _HEAL.get("gap_since") or 0,
+        },
         "pulseHealth": dict(PULSE_HEALTH_SUMMARY),
         "versionSummary": version_summary,
         "latestVersionCode": latest_code,
@@ -2964,7 +3207,8 @@ def snapshot():
             "repo": GUARDIAN_REPO,
             "package": GUARDIAN_PKG,
             "job": dict(GUARDIAN_JOB),
-            "keepLite": {k: KEEP_LITE[k] for k in
+            "opportunistic": dict(OPPORTUNISTIC),
+        "keepLite": {k: KEEP_LITE[k] for k in
                          ("enabled", "interval", "lastSweep", "acted", "checked", "lastActed")},
             "fgLoss": fg_summary,
             "readiness": readiness,
@@ -3163,14 +3407,16 @@ class Handler(BaseHTTPRequestHandler):
                 remember_device(serial, alias=alias)
             return self._send(200, json.dumps({"ok": bool(serial), "alias": alias}))
         if path == "/api/reboot":
-            ok, msg = reboot(body.get("serial", ""))
+            ok, msg = reboot(body.get("serial", ""), force=bool(body.get("force")))
             self._send(200, json.dumps({"ok": ok, "message": msg}))
         elif path == "/api/reboot-batch":
             serials = body.get("serials", [])
             b = CFG.get("batch", {})
-            reboot_batch(serials, int(body.get("wave_size", b.get("wave_size", 8))),
-                         int(body.get("wave_delay_sec", b.get("wave_delay_sec", 20))))
-            self._send(200, json.dumps({"ok": True, "queued": len(serials)}))
+            skipped = reboot_batch(serials, int(body.get("wave_size", b.get("wave_size", 8))),
+                                   int(body.get("wave_delay_sec", b.get("wave_delay_sec", 20))),
+                                   force=bool(body.get("force")))
+            self._send(200, json.dumps({"ok": True, "queued": len(serials) - len(skipped),
+                                        "skippedMaintenance": skipped}))
         elif path == "/api/connect":
             ok, msg = connect(body.get("host", ""))
             self._send(200, json.dumps({"ok": ok, "message": msg}))
@@ -3248,6 +3494,44 @@ class Handler(BaseHTTPRequestHandler):
                     results = list(ex.map(lambda sv: locate_one(sv, seconds, labels.get(sv, sv)), serials))
             ok = sum(1 for r in results if r["ok"])
             self._send(200, json.dumps({"ok": True, "located": ok, "total": len(results), "stop": bool(body.get("stop")), "results": results}))
+        elif path == "/api/guardian/opportunistic":
+            with OPPORTUNISTIC_LOCK:
+                if "enabled" in body:
+                    OPPORTUNISTIC["enabled"] = bool(body["enabled"])
+                    if OPPORTUNISTIC["enabled"]:
+                        OPPORTUNISTIC["lastRun"] = 0.0     # act on the next tick
+                if "batch" in body:
+                    try:
+                        OPPORTUNISTIC["batch"] = max(1, min(20, int(body["batch"])))
+                    except (TypeError, ValueError):
+                        pass
+                if "interval_sec" in body:
+                    try:
+                        OPPORTUNISTIC["interval"] = max(120, int(body["interval_sec"]))
+                    except (TypeError, ValueError):
+                        pass
+                if "tag" in body:
+                    OPPORTUNISTIC["tag"] = (str(body["tag"]) or "latest").strip()
+                st = dict(OPPORTUNISTIC)
+            self._send(200, json.dumps({"ok": True, "opportunistic": st}))
+        elif path == "/api/guardian/maintenance":
+            serials = body.get("serials", [])
+            if not serials:
+                return self._send(200, json.dumps({"ok": False, "message": "no devices selected"}))
+            enter = bool(body.get("enter", True))
+            # bounded the same way the app bounds it (1..1440), so the console cannot ask for a
+            # window the phone will silently clamp
+            try:
+                minutes = max(1, min(1440, int(body.get("minutes", 15))))
+            except (TypeError, ValueError):
+                minutes = 15
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                results = list(ex.map(lambda sv: maintenance_one(sv, enter, minutes), serials))
+            ok = sum(1 for r in results if r["ok"])
+            print(f"[maintenance] {'entered' if enter else 'exited'} on {ok}/{len(results)}"
+                  + (f" for {minutes} min" if enter else ""))
+            self._send(200, json.dumps({"ok": True, "enter": enter, "minutes": minutes,
+                                        "applied": ok, "total": len(results), "results": results}))
         elif path == "/api/live/prep":
             serial = (body.get("serial") or "").strip()
             if not serial:
@@ -3399,10 +3683,18 @@ def main():
     threading.Thread(target=release_loop, daemon=True).start()
     threading.Thread(target=thermal_loop, daemon=True).start()
     threading.Thread(target=keep_lite_loop, daemon=True).start()
+    threading.Thread(target=opportunistic_update_loop, daemon=True).start()
     threading.Thread(target=pulse_health_loop, daemon=True).start()
     threading.Thread(target=telemetry_nudge_loop, daemon=True).start()
     threading.Thread(target=discovery_heal_loop, daemon=True).start()
     threading.Thread(target=idle_hub_loop, daemon=True).start()
+    # Restarting THIS service kills the adb server with it: the server is spawned by our own adb
+    # calls, so it lives in this unit's cgroup. A fresh one starts on the next command, and
+    # ws-scrcpy stays bound to the dead one — unit still "active", still answers 200, device list
+    # silently empty, Live screen does nothing with no error anywhere. _restart_ws_scrcpy() already
+    # existed for heal-triggered adb restarts; a plain console restart needs it just as much
+    # (2026-08-09: Live was dead for hours after routine restarts until this was noticed).
+    threading.Thread(target=_ws_scrcpy_boot_check, daemon=True).start()
     bind, port = CFG.get("bind", "127.0.0.1"), int(CFG.get("port", 8787))
     print(f"Acurast Fleet Console → http://{bind}:{port}   (adb: {ADB})")
     if bind == "0.0.0.0" and not CFG.get("token"):
