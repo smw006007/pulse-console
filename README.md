@@ -103,6 +103,33 @@ In the Guardian app's telemetry setting, set the URL to `http://<your-console>:<
 The console ingests it (unauthenticated ingest — it only stores health), keyed by the phone's Wi-Fi IP,
 and merges it onto that device's card.
 
+### Pause Guardian while you work on a phone
+Guardian puts the processor back in the foreground within about a second, which fights you whenever
+you need the screen. **Pause** (device drawer → *Maintenance*) tells Guardian to stand down for a set
+number of minutes; **Resume** ends it early, and it expires on its own if you forget. A paused phone
+is also skipped by bulk reboots instead of being rebooted out from under you.
+
+The console asks the phone for its current state before treating it as paused, so a Guardian too old
+to understand the broadcast is simply never counted as paused — it is never assumed.
+
+### Guardian updates — idle phones only
+Installing on a phone that is holding a job can cost it that job. With `opportunistic_update` on, the
+console installs the target release **only** on phones Guardian reports as idle, a few at a time, and
+counts stale telemetry as busy rather than gambling on it. Off by default; `opportunistic_tag` picks
+which release ("latest", or a tag). The manual *Update Guardian* action is still there when you want
+a phone updated now and accept the cost.
+
+`keep_lite_foreground` is the smaller sibling: a periodic nudge that reopens the processor on any
+phone found sitting somewhere else.
+
+### Processor (Lite) version audit and updates
+The `updates` block tracks which release each phone runs. With `enabled` on it will also **download
+and verify** GitHub releases — it never installs one on its own; that is always an action you take.
+
+`expected_cert_sha256` is the signing certificate the APK must present. Set it from a release you
+have verified yourself (`apksigner verify --print-certs`). An APK that does not match is refused, and
+so is one you leave blank — nothing is installable until you have said which key you trust.
+
 ### Live screen control (optional)
 Install [`scrcpy`](https://github.com/Genymobile/scrcpy) on a machine with a display for one-off
 interactive control, or stand up [`ws-scrcpy`](https://github.com/NetrisTV/ws-scrcpy) for browser-based

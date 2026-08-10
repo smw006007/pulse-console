@@ -59,9 +59,11 @@ It uses `@dead50f7/adbkit` as a **protocol client** — it does NOT version-kill
 **ws-scrcpy has NO AUTH** — anyone who reaches `:8000` gets full device control — so it MUST be
 tailnet-locked. Run it under systemd with an iptables lock re-applied on every start:
 ```ini
-# /etc/systemd/system/ws-scrcpy.service   (User=acurast, WorkingDirectory=~/ws-scrcpy/dist)
+# /etc/systemd/system/ws-scrcpy.service   (User=<you>, WorkingDirectory=~/ws-scrcpy/dist)
+# Replace tailscale0 with whichever interface is your private one — if that name is wrong the
+# lock silently matches nothing and the port is open to everyone who can route to it.
 ExecStartPre=+/bin/sh -c 'iptables -C INPUT -p tcp --dport 8000 ! -i tailscale0 -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport 8000 ! -i tailscale0 -j DROP'
-ExecStart=/usr/bin/node /home/acurast/ws-scrcpy/dist/index.js
+ExecStart=/usr/bin/node /home/<you>/ws-scrcpy/dist/index.js
 ```
 ws-scrcpy is a **separate project** — it is not shipped with this console and the console does not
 install it. The console only stores its URL and links to it.

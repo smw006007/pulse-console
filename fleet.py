@@ -2009,6 +2009,12 @@ def reassert_guardian_overlay(serials):
         print(f"[guardian] overlay reassert failed: {e}")
 
 
+# Guardian's classes and intent actions live under com.acurast.guardian whatever the app is
+# installed as: this fleet installs it as com.acurast.guardian, the public Pulse Guardian build
+# as com.acurast.pulse.guardian. Only the install id varies (guardian_update.package) — address
+# components as <installed pkg>/<class pkg>.Class so both work.
+GUARDIAN_CLASS_PKG = "com.acurast.guardian"
+
 GUARDIAN_ARM_ACTION = "com.acurast.guardian.action.ENABLE_PROTECTION"
 GUARDIAN_RESET_FG_ACTION = "com.acurast.guardian.action.RESET_FG_LOSSES"  # v1.1.10+
 GUARDIAN_LOCATE_ACTION = "com.acurast.guardian.action.LOCATE"            # v1.1.13+ find-my-phone
@@ -2052,7 +2058,7 @@ load_screensaver()   # restore fleet intent at import (globals defined above)
 def reset_fg_one(serial):
     """Fire the guarded RESET_FG_LOSSES broadcast → Guardian zeroes both foreground-loss counters."""
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_RESET_FG_ACTION]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_RESET_FG_ACTION]
     _, out, err = adb(args, timeout=15)
     ok = "fg_losses_reset" in (out + " " + err)
     with STATE_LOCK:
@@ -2074,7 +2080,7 @@ def locate_one(serial, seconds=120, label=""):
     already granted fleet-wide). Label is sanitized for the on-device shell."""
     lbl = re.sub(r"[^A-Za-z0-9._-]", "-", (label or serial))[:32]
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_ACTION,
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_ACTION,
             "--ei", "seconds", str(max(1, int(seconds))), "--es", "label", lbl]
     _, out, err = adb(args, timeout=15)
     return {"serial": serial, "ok": "locating" in (out + " " + err), "output": (out + " " + err).strip()[:120]}
@@ -2086,7 +2092,7 @@ def screensaver_one(serial, enabled):
     beacon still draws on top, so find-my-phone keeps working with this on."""
     act = GUARDIAN_SCREENSAVER_ON_ACTION if enabled else GUARDIAN_SCREENSAVER_OFF_ACTION
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", act]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", act]
     _, out, err = adb(args, timeout=15)
     blob = out + " " + err
     want = "screensaver_on" if enabled else "screensaver_off"
@@ -2095,7 +2101,7 @@ def screensaver_one(serial, enabled):
 
 def locate_stop_one(serial):
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_STOP_ACTION]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_STOP_ACTION]
     _, out, err = adb(args, timeout=15)
     return {"serial": serial, "ok": "locate_stopped" in (out + " " + err), "output": (out + " " + err).strip()[:120]}
 
@@ -2107,7 +2113,7 @@ def maintenance_one(serial, enter, minutes):
     feature answers nothing useful, which is what `ok` reflects."""
     action = GUARDIAN_MAINT_ENTER_ACTION if enter else GUARDIAN_MAINT_EXIT_ACTION
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", action]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", action]
     if enter:
         args += ["--ei", "minutes", str(minutes)]
     _, out, err = adb(args, timeout=15)
@@ -2129,7 +2135,7 @@ def provision_guardian(serial, telemetry_url, friendly_name):
     sh("settings", "put", "global", "adb_allowed_connection_time", "0")  # adb auth never expires (best-effort)
     # Enable Guardian's WD-auth accessibility service (auto-accepts the Moto "allow WD?" prompt on
     # reboot). Append to any existing services so we don't clobber them.
-    a11y = pkg + "/com.acurast.guardian.core.accessibility.WirelessDebugAuthService"
+    a11y = f"{pkg}/{GUARDIAN_CLASS_PKG}.core.accessibility.WirelessDebugAuthService"
     _, cur, _ = adb(["-s", serial, "shell", "settings", "get", "secure",
                      "enabled_accessibility_services"], timeout=10)
     cur = (cur or "").strip()
@@ -2143,7 +2149,7 @@ def provision_guardian(serial, telemetry_url, friendly_name):
     sh("settings", "put", "secure", "accessibility_enabled", "1")
     ensure_scrcpy_jar(serial)   # so live view works on a freshly-onboarded phone
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", pkg + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_ARM_ACTION]
+            "-n", f"{pkg}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_ARM_ACTION]
     if telemetry_url:
         args += ["--es", "telemetry_url", telemetry_url]
     if friendly_name:
@@ -2246,7 +2252,7 @@ def foreground_lite(serial):
     adb(["-s", serial, "shell", "appops", "set", "--user", "0", GUARDIAN_PKG,
          "SYSTEM_ALERT_WINDOW", "allow"], timeout=10)
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_ARM_ACTION]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_ARM_ACTION]
     tel = (GUARDIAN_CFG.get("telemetry_url") or "").strip()
     if tel:
         args += ["--es", "telemetry_url", tel]
@@ -2298,7 +2304,7 @@ def heartbeat_one(serial, verify=True):
     ip = SERIAL_IP.get(serial)
     before = (TELEMETRY.get(ip) or {}).get("recv_ts", 0) if ip else 0
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
-            "-n", GUARDIAN_PKG + "/.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_HEARTBEAT_ACTION]
+            "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_HEARTBEAT_ACTION]
     _, out, err = adb(args, timeout=15)
     if "Broadcast" not in (out + err):
         return False

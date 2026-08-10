@@ -38,7 +38,7 @@
   "_command_channel_comment": "Signed readb/locate channel. Set the SAME value here and in the app (ENABLE_PROTECTION --es command_secret <same>). Blank = channel off. Also flip READB_ENABLED in fleet.py after your own operator-present test.",
   "guardian_command_secret": "",
 
-  "_updates_comment": "Processor (Lite) OTA. enabled:false means the console only reports which version each phone runs; turn it on to let it download and install releases. expected_cert_sha256 is the signing cert the APK must match — set it from a release you have verified yourself, and an APK that does not match is refused.",
+  "_updates_comment": "Processor (Lite) OTA. enabled:false means the console only reports which version each phone runs; turn it on and it will also download and verify releases. It never installs one by itself — installing is always an action you take. expected_cert_sha256 is the signing cert the APK must match — set it from a release you have verified yourself, and an APK that does not match is refused.",
   "updates": {
     "enabled": false,
     "repo": "Acurast/acurast-processor-update",
