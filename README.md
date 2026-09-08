@@ -143,9 +143,15 @@ briefly removes a detected Guardian screensaver and restores it afterward; it sk
 maintenance mode. Stale ages require two captures. Observations expire after twenty minutes, and
 unreadable screens remain unknown. This scan does not restart processors or clear their data.
 
-**Recover compute** in the device drawer attempts a profile-specific force-stop and Guardian relaunch.
-Android may deny work-profile force-stop; the result then explicitly says relaunch only. A queued
-relaunch is not proof of recovery: check for a fresh heartbeat afterward.
+**Recover compute** in the device drawer requests Guardian recovery after a profile-specific
+force-stop attempt. Private fleet Guardian 1.1.51 also clears the processor cache through Android
+Settings and dismisses its named Recents task when Force stop is unavailable, then relaunches Lite.
+Older Guardian builds provide a relaunch fallback. A queued request is not proof of recovery:
+check for a fresh heartbeat afterward.
+
+Private fleet Guardian 1.1.51 performs this recovery automatically after two independent stale
+heartbeat checks, with a persisted one-hour cooldown. Its recovery-active telemetry pauses the
+console's foreground keeper and opportunistic updater during the Settings/Recents workflow.
 
 ### Live screen control (optional)
 Install [`scrcpy`](https://github.com/Genymobile/scrcpy) on a machine with a display for one-off
