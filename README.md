@@ -130,6 +130,31 @@ and verify** GitHub releases — it never installs one on its own; that is alway
 have verified yourself (`apksigner verify --print-certs`). An APK that does not match is refused, and
 so is one you leave blank — nothing is installable until you have said which key you trust.
 
+### Heartbeat coverage and scanning (optional)
+
+An Active/Running status does not prove the Acurast heartbeat is current. Heartbeats older than 45
+minutes are flagged as stalled, including nodes without a deployment. Missing ages are counted
+separately as **Heartbeat unknown**.
+
+The **Heartbeats** toolbar button reads heartbeat cards from screenshots when Guardian omits the age.
+On Debian/Ubuntu, install `tesseract-ocr` and `python3-pil`. Set `heartbeat_scan_enabled` to `true` in
+`devices.json` to scan automatically every ten minutes. Four phones are checked at a time. The scan
+briefly removes a detected Guardian screensaver and restores it afterward; it skips busy devices and
+maintenance mode. Stale ages require two captures. Observations expire after twenty minutes, and
+unreadable screens remain unknown. This scan does not restart processors or clear their data.
+
+**Recover compute** in the device drawer requests Guardian recovery after a profile-specific
+force-stop attempt. With Pulse Guardian 1.2.0+ and **Recover stale heartbeats** enabled in its Settings,
+Guardian attempts to clear the processor cache through Android Settings, stop the processor,
+dismiss its named Recents card, and relaunch Lite. App data is preserved. Older Guardian builds and
+installations with that setting off provide a relaunch fallback. A queued request is not proof of
+recovery: check for a fresh heartbeat afterward.
+
+The same opt-in setting enables automatic recovery after two independent heartbeat checks older
+than 45 minutes, with a persisted one-hour cooldown. Recovery-active telemetry pauses the console's
+foreground keeper and opportunistic updater during the Settings/Recents workflow. Configure optional
+self-hosted telemetry to let the console receive that recovery state.
+
 ### Live screen control (optional)
 Install [`scrcpy`](https://github.com/Genymobile/scrcpy) on a machine with a display for one-off
 interactive control, or stand up [`ws-scrcpy`](https://github.com/NetrisTV/ws-scrcpy) for browser-based

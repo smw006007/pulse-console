@@ -16,9 +16,19 @@ apk-cache/
 guardian-apks/
 
 # signing material — never commit
-release-keystore.jks
+*.jks
+*.keystore
+*.p12
+keystore.properties
+credentials.txt
+.env
+.env.*
 
 # local backups
 *.bak
 *.bak-*
 static/*.bak*
+
+# Local screenshot heartbeat observations
+heartbeat_checks.json
+heartbeat_checks.tmp

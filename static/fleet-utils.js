@@ -14,6 +14,14 @@
     heartbeatStaleMs: 10 * 60 * 1000,
   });
 
+  // Acurast's Active/Running word can survive a failed heartbeat loop.
+  function isComputeStalled(t) {
+    const active = t.computeActive === true || /^(active|running)$/i.test(t.computeStatus || "");
+    const age = t.heartbeatAgeMin;
+    const stale = t.heartbeatKnown !== false && typeof age === "number" && Number.isFinite(age) && age > 45;
+    return stale || t.heartbeatStale === true || (active && t.earning === false);
+  }
+
   function effectiveState(device) {
     return device && (device.action === "rebooting" || device.action === "updating")
       ? device.action : (device && device.state) || "offline";
@@ -263,16 +271,24 @@
         if (want === "ok" || want === "true" || want === "alive") return v === true;
         return false;
       }
+      case "heartbeat": {
+        const t = device.telemetry || {};
+        const known = t.heartbeatKnown !== false && typeof t.heartbeatAgeMin === "number" && Number.isFinite(t.heartbeatAgeMin);
+        if (value === "unknown") return !known;
+        if (value === "stale") return known && t.heartbeatAgeMin > 45;
+        if (value === "fresh") return known && t.heartbeatAgeMin <= 45;
+        return false;
+      }
       case "stalled": {
         const t = device.telemetry || {};
-        const isStalled = t.earning === false && t.computeActive === true;
+        const isStalled = isComputeStalled(t);
         const want = String(value || "true").toLowerCase();
         return (want === "true" || want === "yes") ? isStalled : !isStalled;
       }
       case "earning": {
         const t = device.telemetry || {};
         const want = String(value || "true").toLowerCase();
-        return (want === "true" || want === "yes") ? t.earning === true : t.earning === false;
+        return (want === "true" || want === "yes") ? t.earning === true && !isComputeStalled(t) : t.earning === false || isComputeStalled(t);
       }
       case "pulse": {
         const status = (device.pulseHealth && device.pulseHealth.status) || "";
@@ -402,6 +418,7 @@
 
   return {
     HEALTH_THRESHOLDS,
+    isComputeStalled,
     effectiveState,
     deviceIp,
     batteryValue,

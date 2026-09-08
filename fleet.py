@@ -1299,8 +1299,46 @@ def screenshot_png(serial):
         screensaver_one(serial, True)   # always restore, even if the capture blew up
 
 
+def recover_compute(serial):
+    """Soft restart only the identified processor instance, then relaunch through Guardian."""
+    with STATE_LOCK:
+        if STATE.get(serial, {}).get("state") != "device":
+            return {"serial": serial, "ok": False, "output": "Device is not connected"}
+    if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", TARGET_PKG):
+        return {"serial": serial, "ok": False, "output": "Invalid processor package"}
+    command = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-n",
+               GUARDIAN_PKG + "/com.acurast.guardian.core.receiver.ProvisioningReceiver",
+               "-a", "com.acurast.guardian.action.RECOVER_COMPUTE"]
+    code, out, err = adb(command + ["--ez", "probe", "true"], timeout=20)
+    modern = code == 0 and "compute_recovery_supported" in out
+    if not modern and not foreground_lite(serial):
+        return {"serial": serial, "ok": False,
+                "output": "Guardian did not acknowledge relaunch; processor was not stopped."}
+    info = read_version(serial) or {}
+    installed = info.get("usersInstalled", [])
+    profiles = managed_user_ids(serial)
+    candidates = [u for u in installed if u in profiles]
+    # Never guess user 0 when another instance exists or profile discovery failed.
+    user = candidates[0] if len(candidates) == 1 else (0 if installed == [0] else None)
+    stop_note = "Processor profile ambiguous; Guardian will handle recovery."
+    if user is not None:
+        code, out, err = adb(["-s", serial, "shell", "am", "force-stop", "--user", str(user), TARGET_PKG], timeout=20)
+        stopped = code == 0 and not any(word in (out + err).lower() for word in ("exception", "error", "denied"))
+        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; Guardian will handle recovery."
+    if modern:
+        code, out, err = adb(command, timeout=20)
+        ok = code == 0 and "compute_recovery_supported" in out
+    else:
+        ok = foreground_lite(serial)
+    return {"serial": serial, "ok": ok,
+            "output": stop_note + (" Guardian recovery requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
+                                   if ok else " Guardian relaunch failed; manual attention required.")}
+
+
 def run_device_action(serial, action, command):
     """Run one remote action on a device. Returns {serial, ok, output}."""
+    if action == "recover_compute":
+        return recover_compute(serial)
     if action == "wake":
         code, out, err = adb(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
     elif action == "open_acurast":
@@ -2639,13 +2677,16 @@ def _in_maintenance(serial):
     ENABLE_PROTECTION, which yanks Lite back to the foreground — exactly what maintenance mode exists
     to prevent. Unknown/stale telemetry returns False so the sweeper still protects silent phones.
     """
+    if serial in CFG.get("guardian_canary_serials", []):
+        return True
     now = time.time()
     with STATE_LOCK:
         cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
         for c in cands:
             t = TELEMETRY.get(c) if c else None
             if t and (now - t.get("recv_ts", 0)) < TELEMETRY_TTL:
-                return "MAINTENANCE" in str(t.get("guardianState") or "").upper()
+                return ("MAINTENANCE" in str(t.get("guardianState") or "").upper() or
+                        (t.get("heartbeatRecoveryActive") is True and now - t.get("recv_ts", 0) < 120))
     return False
 
 
@@ -2670,6 +2711,8 @@ def _idle_needing_update(target_version):
     with STATE_LOCK:
         online = [(sv, d) for sv, d in STATE.items() if d.get("state") == "device"]
     for serial, d in online:
+        if _in_maintenance(serial):
+            continue
         if (d.get("guardianVersion") or "") == target_version:
             continue
         cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
@@ -3039,6 +3082,32 @@ def debloat_report():
 
 # ---------------------------------------------------------------- HTTP
 
+def heartbeat_scan_eligible(serial):
+    with STATE_LOCK:
+        d = STATE.get(serial, {})
+        ready = d.get("state") == "device" and not d.get("action") and not d.get("guardianAction")
+    return ready and not _in_maintenance(serial)
+
+
+from heartbeat_scan import HeartbeatScanner
+HEARTBEAT_SCANNER = HeartbeatScanner(os.path.join(HERE, "heartbeat_checks.json"),
+                                     _capture_png, screensaver_one, heartbeat_scan_eligible)
+
+
+def start_heartbeat_scan(requested=None):
+    with STATE_LOCK:
+        serials = [s for s, d in STATE.items() if d.get("state") == "device" and (requested is None or s in requested)]
+    return HEARTBEAT_SCANNER.start(serials)
+
+
+def heartbeat_scan_loop():
+    time.sleep(20)
+    while True:
+        if CFG.get("heartbeat_scan_enabled", False):
+            start_heartbeat_scan()
+        time.sleep(600)
+
+
 def snapshot():
     with STATE_LOCK:
         devices = [dict(d) for d in STATE.values()]
@@ -3181,8 +3250,11 @@ def snapshot():
             r_ready += 1
     readiness = {"reporting": r_reporting, "ready": r_ready, "degraded": r_degraded,
                  "missingByFlag": miss_by_flag, "degradedDevices": degraded_devs}
+    for device in devices:
+        HEARTBEAT_SCANNER.attach(device)
     return {
         "devices": devices,
+        "heartbeatScan": HEARTBEAT_SCANNER.status(),
         "counts": counts,
         "total": len(devices),
         "batch": CFG.get("batch", {"wave_size": 8, "wave_delay_sec": 20}),
@@ -3412,6 +3484,12 @@ class Handler(BaseHTTPRequestHandler):
                         STATE[serial]["alias"] = alias
                 remember_device(serial, alias=alias)
             return self._send(200, json.dumps({"ok": bool(serial), "alias": alias}))
+        if path == "/api/heartbeat-scan":
+            requested = body.get("serials")
+            if requested is not None and not isinstance(requested, list):
+                return self._send(400, json.dumps({"error": "serials must be a list"}))
+            started = start_heartbeat_scan(requested)
+            return self._send(200, json.dumps({"ok": True, "started": started, "scan": HEARTBEAT_SCANNER.status()}))
         if path == "/api/reboot":
             ok, msg = reboot(body.get("serial", ""), force=bool(body.get("force")))
             self._send(200, json.dumps({"ok": ok, "message": msg}))
@@ -3694,6 +3772,7 @@ def main():
     threading.Thread(target=telemetry_nudge_loop, daemon=True).start()
     threading.Thread(target=discovery_heal_loop, daemon=True).start()
     threading.Thread(target=idle_hub_loop, daemon=True).start()
+    threading.Thread(target=heartbeat_scan_loop, daemon=True).start()
     # Restarting THIS service kills the adb server with it: the server is spawned by our own adb
     # calls, so it lives in this unit's cgroup. A fresh one starts on the next command, and
     # ws-scrcpy stays bound to the dead one — unit still "active", still answers 200, device list
