@@ -1320,18 +1320,18 @@ def recover_compute(serial):
     candidates = [u for u in installed if u in profiles]
     # Never guess user 0 when another instance exists or profile discovery failed.
     user = candidates[0] if len(candidates) == 1 else (0 if installed == [0] else None)
-    stop_note = "Processor profile ambiguous; relaunch only."
+    stop_note = "Processor profile ambiguous; Guardian will handle recovery."
     if user is not None:
         code, out, err = adb(["-s", serial, "shell", "am", "force-stop", "--user", str(user), TARGET_PKG], timeout=20)
         stopped = code == 0 and not any(word in (out + err).lower() for word in ("exception", "error", "denied"))
-        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; relaunch only."
+        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; Guardian will handle recovery."
     if modern:
         code, out, err = adb(command, timeout=20)
         ok = code == 0 and "compute_recovery_supported" in out
     else:
         ok = foreground_lite(serial)
     return {"serial": serial, "ok": ok,
-            "output": stop_note + (" Guardian relaunch requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
+            "output": stop_note + (" Guardian recovery requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
                                    if ok else " Guardian relaunch failed; manual attention required.")}
 
 

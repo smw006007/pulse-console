@@ -144,14 +144,16 @@ maintenance mode. Stale ages require two captures. Observations expire after twe
 unreadable screens remain unknown. This scan does not restart processors or clear their data.
 
 **Recover compute** in the device drawer requests Guardian recovery after a profile-specific
-force-stop attempt. Private fleet Guardian 1.1.51 also clears the processor cache through Android
-Settings and dismisses its named Recents task when Force stop is unavailable, then relaunches Lite.
-Older Guardian builds provide a relaunch fallback. A queued request is not proof of recovery:
-check for a fresh heartbeat afterward.
+force-stop attempt. With Pulse Guardian 1.2.0+ and **Recover stale heartbeats** enabled in its Settings,
+Guardian attempts to clear the processor cache through Android Settings, stop the processor,
+dismiss its named Recents card, and relaunch Lite. App data is preserved. Older Guardian builds and
+installations with that setting off provide a relaunch fallback. A queued request is not proof of
+recovery: check for a fresh heartbeat afterward.
 
-Private fleet Guardian 1.1.51 performs this recovery automatically after two independent stale
-heartbeat checks, with a persisted one-hour cooldown. Its recovery-active telemetry pauses the
-console's foreground keeper and opportunistic updater during the Settings/Recents workflow.
+The same opt-in setting enables automatic recovery after two independent heartbeat checks older
+than 45 minutes, with a persisted one-hour cooldown. Recovery-active telemetry pauses the console's
+foreground keeper and opportunistic updater during the Settings/Recents workflow. Configure optional
+self-hosted telemetry to let the console receive that recovery state.
 
 ### Live screen control (optional)
 Install [`scrcpy`](https://github.com/Genymobile/scrcpy) on a machine with a display for one-off

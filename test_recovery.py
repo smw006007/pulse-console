@@ -36,32 +36,26 @@ class RecoveryTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(source), "exec"), ns)
         return ns["recover_compute"]("phone"), adb
 
-    def test_both_consoles(self):
-        root = Path(__file__).resolve().parent.parent
+    def test_recovery(self):
+        source = Path(__file__).resolve().parent / "fleet.py"
         ack = (0, 'data="compute_recovery_supported"', '')
-        for folder in ("pulse-console", "AcurastFleetConsole", "live-console-review"):
-            source = root / folder / "fleet.py"
-            if not source.exists():
-                continue
-            with self.subTest(console=folder):
-                result, adb = self.action(source, [(0, 'result=0', '')])
-                self.assertFalse(result['ok'])
-                self.assertEqual(adb.call_count, 1)
-                result, adb = self.action(source, [ack, (0, '', ''), ack])
-                self.assertTrue(result['ok'])
-                self.assertIn('11', adb.call_args_list[1].args[0])
-                self.assertIn('force-stop', adb.call_args_list[1].args[0])
-                self.assertIn('unverified', result['output'])
-                result, adb = self.action(source, [ack, (1, '', 'SecurityException'), ack])
-                self.assertTrue(result['ok'])
-                self.assertIn('blocked force-stop', result['output'])
-                result, adb = self.action(source, [ack, ack], profiles=())
-                self.assertEqual(adb.call_count, 2)
-                self.assertIn('ambiguous', result['output'])
-                if folder != 'AcurastFleetConsole':
-                    result, adb = self.action(source, [(0, '', ''), (0, '', '')], legacy=True)
-                    self.assertTrue(result['ok'])
-                    self.assertIn('force-stop', adb.call_args_list[1].args[0])
+        result, adb = self.action(source, [(0, 'result=0', '')])
+        self.assertFalse(result['ok'])
+        self.assertEqual(adb.call_count, 1)
+        result, adb = self.action(source, [ack, (0, '', ''), ack])
+        self.assertTrue(result['ok'])
+        self.assertIn('11', adb.call_args_list[1].args[0])
+        self.assertIn('force-stop', adb.call_args_list[1].args[0])
+        self.assertIn('unverified', result['output'])
+        result, adb = self.action(source, [ack, (1, '', 'SecurityException'), ack])
+        self.assertTrue(result['ok'])
+        self.assertIn('blocked force-stop', result['output'])
+        result, adb = self.action(source, [ack, ack], profiles=())
+        self.assertEqual(adb.call_count, 2)
+        self.assertIn('ambiguous', result['output'])
+        result, adb = self.action(source, [(0, '', ''), (0, '', '')], legacy=True)
+        self.assertTrue(result['ok'])
+        self.assertIn('force-stop', adb.call_args_list[1].args[0])
 
 
 if __name__ == '__main__':
