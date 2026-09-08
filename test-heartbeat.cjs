@@ -12,8 +12,8 @@ test('stale age overrides Active/Running and an old earning=true flag', () => {
   }
 });
 
-test('unknown heartbeat and inactive nodes do not become stalled', () => {
-  assert(!isComputeStalled({ computeStatus: 'Inactive', heartbeatAgeMin: 840 }));
+test('missing heartbeat is unknown; lack of a deployment does not hide a stale heartbeat', () => {
+  assert(isComputeStalled({ computeStatus: 'NoDeployments', heartbeatAgeMin: 840 }));
   assert(!isComputeStalled({ computeActive: true, heartbeatAgeMin: null, earning: null }));
   assert(!isComputeStalled({ computeActive: true, heartbeatAgeMin: 840, heartbeatKnown: false }));
 });

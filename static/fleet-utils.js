@@ -19,7 +19,7 @@
     const active = t.computeActive === true || /^(active|running)$/i.test(t.computeStatus || "");
     const age = t.heartbeatAgeMin;
     const stale = t.heartbeatKnown !== false && typeof age === "number" && Number.isFinite(age) && age > 45;
-    return active && (stale || t.heartbeatStale === true || t.earning === false);
+    return stale || t.heartbeatStale === true || (active && t.earning === false);
   }
 
   function effectiveState(device) {
@@ -269,6 +269,14 @@
         if (want === "rebinding" || want === "flap") return v === false && mins < 15;
         if (want === "flag") return v === false;
         if (want === "ok" || want === "true" || want === "alive") return v === true;
+        return false;
+      }
+      case "heartbeat": {
+        const t = device.telemetry || {};
+        const known = t.heartbeatKnown !== false && typeof t.heartbeatAgeMin === "number" && Number.isFinite(t.heartbeatAgeMin);
+        if (value === "unknown") return !known;
+        if (value === "stale") return known && t.heartbeatAgeMin > 45;
+        if (value === "fresh") return known && t.heartbeatAgeMin <= 45;
         return false;
       }
       case "stalled": {

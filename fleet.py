@@ -3077,6 +3077,32 @@ def debloat_report():
 
 # ---------------------------------------------------------------- HTTP
 
+def heartbeat_scan_eligible(serial):
+    with STATE_LOCK:
+        d = STATE.get(serial, {})
+        ready = d.get("state") == "device" and not d.get("action") and not d.get("guardianAction")
+    return ready and not _in_maintenance(serial)
+
+
+from heartbeat_scan import HeartbeatScanner
+HEARTBEAT_SCANNER = HeartbeatScanner(os.path.join(HERE, "heartbeat_checks.json"),
+                                     _capture_png, screensaver_one, heartbeat_scan_eligible)
+
+
+def start_heartbeat_scan():
+    with STATE_LOCK:
+        serials = [s for s, d in STATE.items() if d.get("state") == "device"]
+    return HEARTBEAT_SCANNER.start(serials)
+
+
+def heartbeat_scan_loop():
+    time.sleep(20)
+    while True:
+        if CFG.get("heartbeat_scan_enabled", False):
+            start_heartbeat_scan()
+        time.sleep(600)
+
+
 def snapshot():
     with STATE_LOCK:
         devices = [dict(d) for d in STATE.values()]
@@ -3219,8 +3245,11 @@ def snapshot():
             r_ready += 1
     readiness = {"reporting": r_reporting, "ready": r_ready, "degraded": r_degraded,
                  "missingByFlag": miss_by_flag, "degradedDevices": degraded_devs}
+    for device in devices:
+        HEARTBEAT_SCANNER.attach(device)
     return {
         "devices": devices,
+        "heartbeatScan": HEARTBEAT_SCANNER.status(),
         "counts": counts,
         "total": len(devices),
         "batch": CFG.get("batch", {"wave_size": 8, "wave_delay_sec": 20}),
@@ -3450,6 +3479,9 @@ class Handler(BaseHTTPRequestHandler):
                         STATE[serial]["alias"] = alias
                 remember_device(serial, alias=alias)
             return self._send(200, json.dumps({"ok": bool(serial), "alias": alias}))
+        if path == "/api/heartbeat-scan":
+            started = start_heartbeat_scan()
+            return self._send(200, json.dumps({"ok": True, "started": started, "scan": HEARTBEAT_SCANNER.status()}))
         if path == "/api/reboot":
             ok, msg = reboot(body.get("serial", ""), force=bool(body.get("force")))
             self._send(200, json.dumps({"ok": ok, "message": msg}))
@@ -3732,6 +3764,7 @@ def main():
     threading.Thread(target=telemetry_nudge_loop, daemon=True).start()
     threading.Thread(target=discovery_heal_loop, daemon=True).start()
     threading.Thread(target=idle_hub_loop, daemon=True).start()
+    threading.Thread(target=heartbeat_scan_loop, daemon=True).start()
     # Restarting THIS service kills the adb server with it: the server is spawned by our own adb
     # calls, so it lives in this unit's cgroup. A fresh one starts on the next command, and
     # ws-scrcpy stays bound to the dead one — unit still "active", still answers 200, device list

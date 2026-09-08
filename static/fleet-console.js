@@ -378,6 +378,11 @@
       const t = d.telemetry || {};
       return U.isComputeStalled(t);
     });
+    const heartbeatUnknown = m.devices.filter(d => {
+      const t = d.telemetry || {};
+      return t.heartbeatKnown === false || typeof t.heartbeatAgeMin !== "number";
+    }).length;
+    const heartbeatScan = app.data.heartbeatScan || {};
     const anrDevices = m.devices.filter((d) => ((d.telemetry || {}).anrSinceBoot || 0) > 0);
     const anrTotal = anrDevices.reduce((sum, d) => sum + ((d.telemetry || {}).anrSinceBoot || 0), 0);
     const unarmedDevices = m.devices.filter(protectionOff);
@@ -396,7 +401,8 @@
       // and still scraping compute, so the flag alone is not trustworthy. If compute fields are
       // still arriving, the accessibility service is alive whatever the flag says.
       { label: "Scrape dead", value: m.devices.filter(scrapeDead).length, context: m.devices.filter(scrapeDead).length ? `Unbound >${A11Y_DEAD_MIN}m — re-bind is not taking; reboot these` : (m.devices.filter(scrapeFlapping).length ? `${m.devices.filter(scrapeFlapping).length} re-binding after an OTA (normal, self-heals)` : "Accessibility service bound everywhere reporting it"), tone: m.devices.filter(scrapeDead).length ? "red" : "green", icon: "\u2717", query: "a11y:dead" },
-      { label: "Up but stalled", value: stalledDevices.length, context: stalledDevices.length ? "Running, but heartbeat stale — earning nothing" : "No stalled heartbeats reported", tone: stalledDevices.length ? "red" : "green", icon: "\u25D1", query: "stalled:true" },
+      { label: "Up but stalled", value: stalledDevices.length, context: `${heartbeatUnknown} heartbeat(s) unknown; not counted as healthy`, tone: stalledDevices.length ? "red" : heartbeatUnknown ? "amber" : "green", icon: "\u25D1", query: "stalled:true" },
+      { label: "Heartbeat unknown", value: heartbeatUnknown, context: heartbeatScan.active ? `Scanning ${heartbeatScan.done}/${heartbeatScan.total}` : "Click to inspect phones needing a heartbeat reading", tone: heartbeatUnknown ? "amber" : "green", icon: "?", query: "heartbeat:unknown" },
       // The canary runs two instances of the SAME package: a user-0 hub (the "Open Processor
       // to Provide Compute" screen) and the work-profile Processor that actually earns.
       // Guardian's targetOnTop matches on package NAME only, so it reads true for either --
@@ -1231,7 +1237,7 @@ function computeBadge(device) {
     const t = device.telemetry || {};
     const status = t.computeStatus;
     const active = t.computeActive;
-    if (status === undefined && active === undefined) {
+    if (status == null && active == null && t.heartbeatAgeMin == null) {
       // Absent compute fields have two very different causes, and before v1.1.31 they were
       // indistinguishable. a11yHealthy is an independent 20s liveness beat from the accessibility
       // service, so it does not depend on Lite rendering:
@@ -1249,13 +1255,13 @@ function computeBadge(device) {
     // "up but stalled": Lite still says Running, but the heartbeat has gone quiet, so the phone
     // earns nothing while looking healthy. This is the case computeActive alone cannot see.
     const stalled = U.isComputeStalled(t);
-    const unknownHeartbeat = active === true && (t.heartbeatKnown === false || hbAge == null);
+    const unknownHeartbeat = t.heartbeatKnown === false || hbAge == null;
     const cls = stalled ? "compute-stalled" : unknownHeartbeat ? "compute-off" : active === true ? "compute-on" : "compute-off";
     const dot = stalled ? "\u25D1" : active === true ? "\u25CF" : "\u25CB";
     // "NoDeployments" is the chain's word for "nothing assigned right now" — an ordinary state, not
     // a fault, so it must not read like one. A phone with no job is still Active and heartbeating.
     const noJob = status === "NoDeployments" || active === false;
-    const label = stalled ? "Stalled" : unknownHeartbeat ? "On job / heartbeat unknown" : active === true ? "On job" : noJob ? "No job" : (status ? String(status) : "Inactive");
+    const label = stalled ? "Stalled" : unknownHeartbeat ? "Heartbeat unknown" : active == null && hbAge != null ? "Heartbeat fresh" : active === true ? "On job" : noJob ? "No job" : (status ? String(status) : "Inactive");
     const bits = [status ? `Compute status: ${status}` : "Compute status unknown"];
     if (earning !== undefined) bits.push(`earning: ${earning}`);
     if (hbAge !== undefined && hbAge !== null) bits.push(`heartbeat ${hbAge}m ago`);
@@ -2785,6 +2791,14 @@ function computeBadge(device) {
       if (action === "filter-pulse") { setQuery(`pulse:${actionButton.dataset.pulse || "degraded"}`); return; }
       if (action === "toggle-screensaver") return toggleScreensaver();
       if (action === "discover") return discover(actionButton);
+      if (action === "scan-heartbeats") {
+        try {
+          const result = await api("/api/heartbeat-scan");
+          toast("Heartbeat scan", result.started ? "Reading phone screens; results update as each phone is checked." : "A scan is already running.");
+          await poll();
+        } catch (error) { toast("Heartbeat scan failed", error.message, "error"); }
+        return;
+      }
       if (action === "scan-versions") return scanVersions(actionButton);
       if (action === "guardian-releases") return guardianReleases(actionButton);
       if (action === "guardian-scan") return guardianScan(actionButton);

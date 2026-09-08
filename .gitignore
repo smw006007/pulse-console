@@ -22,3 +22,7 @@ release-keystore.jks
 *.bak
 *.bak-*
 static/*.bak*
+
+# Local screenshot heartbeat observations
+heartbeat_checks.json
+heartbeat_checks.tmp
