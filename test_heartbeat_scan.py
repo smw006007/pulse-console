@@ -3,10 +3,22 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from heartbeat_scan import HeartbeatScanner, parse_age
+from heartbeat_scan import HeartbeatScanner, parse_age, looks_like_overlay
 
 
 class HeartbeatScanTest(unittest.TestCase):
+    def test_dim_idle_dot_is_still_an_overlay(self):
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError:
+            self.skipTest('Pillow optional; checked on OCR host')
+        import io
+        image = Image.new('RGB', (720, 1600), 'black')
+        ImageDraw.Draw(image).ellipse((300, 60, 360, 120), fill=(15, 53, 35))
+        png = io.BytesIO()
+        image.save(png, format='PNG')
+        self.assertTrue(looks_like_overlay(png.getvalue()))
+
     def test_parser_requires_heartbeat_label_and_units(self):
         self.assertEqual(parse_age('heartbeat 14 hours ago'), 840)
         self.assertEqual(parse_age('heartbeat\n23 minutes ago'), 23)

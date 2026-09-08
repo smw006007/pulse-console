@@ -62,11 +62,11 @@ def looks_like_overlay(png):
     from PIL import Image
     image = Image.open(io.BytesIO(png)).convert('RGB')
     w, h = image.size
-    image = image.crop((0, int(h * .08), w, int(h * .94))).resize((80, 100))
+    image = image.crop((0, int(h * .03), w, int(h * .97))).resize((80, 100))
     pixels = list(image.getdata())
     dark = sum(max(p) < 25 for p in pixels)
-    green = sum(g > 100 and g > r * 1.2 and g > b * 1.1 for r, g, b in pixels)
-    return dark > len(pixels) * .94 and green > 3
+    colored = sum(max(p) > 35 and max(p) - min(p) > 15 for p in pixels)
+    return dark > len(pixels) * .94 and colored > 3
 
 
 class HeartbeatScanner:

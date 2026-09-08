@@ -3089,9 +3089,9 @@ HEARTBEAT_SCANNER = HeartbeatScanner(os.path.join(HERE, "heartbeat_checks.json")
                                      _capture_png, screensaver_one, heartbeat_scan_eligible)
 
 
-def start_heartbeat_scan():
+def start_heartbeat_scan(requested=None):
     with STATE_LOCK:
-        serials = [s for s, d in STATE.items() if d.get("state") == "device"]
+        serials = [s for s, d in STATE.items() if d.get("state") == "device" and (requested is None or s in requested)]
     return HEARTBEAT_SCANNER.start(serials)
 
 
@@ -3480,7 +3480,10 @@ class Handler(BaseHTTPRequestHandler):
                 remember_device(serial, alias=alias)
             return self._send(200, json.dumps({"ok": bool(serial), "alias": alias}))
         if path == "/api/heartbeat-scan":
-            started = start_heartbeat_scan()
+            requested = body.get("serials")
+            if requested is not None and not isinstance(requested, list):
+                return self._send(400, json.dumps({"error": "serials must be a list"}))
+            started = start_heartbeat_scan(requested)
             return self._send(200, json.dumps({"ok": True, "started": started, "scan": HEARTBEAT_SCANNER.status()}))
         if path == "/api/reboot":
             ok, msg = reboot(body.get("serial", ""), force=bool(body.get("force")))
