@@ -1,0 +1,51 @@
+"""Isolate the action from fleet.py's server/config initialization; no device access."""
+import ast
+from pathlib import Path
+import re
+import threading
+import unittest
+from unittest.mock import Mock
+
+
+class RecoveryTest(unittest.TestCase):
+    def action(self, source, replies, installed=(0, 11), profiles=(11,), legacy=False):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "recover_compute")
+        adb = Mock(side_effect=replies)
+        ns = dict(STATE_LOCK=threading.Lock(), STATE={"phone": {"state": "device"}},
+                  TARGET_PKG="com.acurast.processor", GUARDIAN_PKG="com.acurast.guardian",
+                  adb=adb, re=re, foreground_lite=Mock(return_value=legacy), read_version=lambda _: {"usersInstalled": list(installed)},
+                  managed_user_ids=lambda _: list(profiles))
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(source), "exec"), ns)
+        return ns["recover_compute"]("phone"), adb
+
+    def test_both_consoles(self):
+        root = Path(__file__).resolve().parent.parent
+        ack = (0, 'data="compute_recovery_supported"', '')
+        for folder in ("pulse-console", "AcurastFleetConsole", "live-console-review"):
+            source = root / folder / "fleet.py"
+            if not source.exists():
+                continue
+            with self.subTest(console=folder):
+                result, adb = self.action(source, [(0, 'result=0', '')])
+                self.assertFalse(result['ok'])
+                self.assertEqual(adb.call_count, 1)
+                result, adb = self.action(source, [ack, (0, '', ''), ack])
+                self.assertTrue(result['ok'])
+                self.assertIn('11', adb.call_args_list[1].args[0])
+                self.assertIn('force-stop', adb.call_args_list[1].args[0])
+                self.assertIn('unverified', result['output'])
+                result, adb = self.action(source, [ack, (1, '', 'SecurityException'), ack])
+                self.assertTrue(result['ok'])
+                self.assertIn('blocked force-stop', result['output'])
+                result, adb = self.action(source, [ack, ack], profiles=())
+                self.assertEqual(adb.call_count, 2)
+                self.assertIn('ambiguous', result['output'])
+                if folder != 'AcurastFleetConsole':
+                    result, adb = self.action(source, [(0, '', ''), (0, '', '')], legacy=True)
+                    self.assertTrue(result['ok'])
+                    self.assertIn('force-stop', adb.call_args_list[1].args[0])
+
+
+if __name__ == '__main__':
+    unittest.main()

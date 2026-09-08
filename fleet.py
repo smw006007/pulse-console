@@ -1299,8 +1299,46 @@ def screenshot_png(serial):
         screensaver_one(serial, True)   # always restore, even if the capture blew up
 
 
+def recover_compute(serial):
+    """Soft restart only the identified processor instance, then relaunch through Guardian."""
+    with STATE_LOCK:
+        if STATE.get(serial, {}).get("state") != "device":
+            return {"serial": serial, "ok": False, "output": "Device is not connected"}
+    if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", TARGET_PKG):
+        return {"serial": serial, "ok": False, "output": "Invalid processor package"}
+    command = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-n",
+               GUARDIAN_PKG + "/com.acurast.guardian.core.receiver.ProvisioningReceiver",
+               "-a", "com.acurast.guardian.action.RECOVER_COMPUTE"]
+    code, out, err = adb(command + ["--ez", "probe", "true"], timeout=20)
+    modern = code == 0 and "compute_recovery_supported" in out
+    if not modern and not foreground_lite(serial):
+        return {"serial": serial, "ok": False,
+                "output": "Guardian did not acknowledge relaunch; processor was not stopped."}
+    info = read_version(serial) or {}
+    installed = info.get("usersInstalled", [])
+    profiles = managed_user_ids(serial)
+    candidates = [u for u in installed if u in profiles]
+    # Never guess user 0 when another instance exists or profile discovery failed.
+    user = candidates[0] if len(candidates) == 1 else (0 if installed == [0] else None)
+    stop_note = "Processor profile ambiguous; relaunch only."
+    if user is not None:
+        code, out, err = adb(["-s", serial, "shell", "am", "force-stop", "--user", str(user), TARGET_PKG], timeout=20)
+        stopped = code == 0 and not any(word in (out + err).lower() for word in ("exception", "error", "denied"))
+        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; relaunch only."
+    if modern:
+        code, out, err = adb(command, timeout=20)
+        ok = code == 0 and "compute_recovery_supported" in out
+    else:
+        ok = foreground_lite(serial)
+    return {"serial": serial, "ok": ok,
+            "output": stop_note + (" Guardian relaunch requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
+                                   if ok else " Guardian relaunch failed; manual attention required.")}
+
+
 def run_device_action(serial, action, command):
     """Run one remote action on a device. Returns {serial, ok, output}."""
+    if action == "recover_compute":
+        return recover_compute(serial)
     if action == "wake":
         code, out, err = adb(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
     elif action == "open_acurast":

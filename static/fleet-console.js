@@ -339,7 +339,7 @@
       "Needs attention": "Phones failing a health check: temperature, battery, state, version or arming.",
       "Pulse degraded": "Processors that acurastpulse.com rates as investigate/watch, based on on-chain reliability rather than anything local.",
       "Scrape dead": "Phones whose accessibility service has been unbound long enough that Guardian's compute scrape is genuinely dead. Re-binding normally self-heals; a persistent one needs a reboot.",
-      "Up but stalled": "Reports 'Running' but the heartbeat has gone stale -- the node looks alive and is earning nothing.",
+      "Up but stalled": "Reports Active/Running but its heartbeat is over 45 minutes old; recovery needed.",
       "App ANRs": "Phones where the Processor's main thread has wedged long enough for Android to raise 'App isn't responding'. Guardian dismisses the dialog so the node recovers, which is exactly why this never shows up as lost earnings.",
       "Idle hub": "Phones sitting on the wallet/hub screen with 'Open Processor to Provide Compute' showing. The node is NOT computing. Detected from the foreground user over ADB, independently of Guardian.",
       "On jobs": "Phones currently running a deployment, out of those reporting telemetry at all. A phone with no job is still online, attested and heartbeating — the network simply has not assigned it work. Assignments are sticky, so a phone that loses one waits for a new deployment rather than reclaiming the old.",
@@ -376,7 +376,7 @@
     // up-but-stalled: says Running but the heartbeat is stale -> earning nothing (v1.1.27 `earning`)
     const stalledDevices = m.devices.filter((d) => {
       const t = d.telemetry || {};
-      return t.earning === false && t.computeActive === true;
+      return U.isComputeStalled(t);
     });
     const anrDevices = m.devices.filter((d) => ((d.telemetry || {}).anrSinceBoot || 0) > 0);
     const anrTotal = anrDevices.reduce((sum, d) => sum + ((d.telemetry || {}).anrSinceBoot || 0), 0);
@@ -396,7 +396,7 @@
       // and still scraping compute, so the flag alone is not trustworthy. If compute fields are
       // still arriving, the accessibility service is alive whatever the flag says.
       { label: "Scrape dead", value: m.devices.filter(scrapeDead).length, context: m.devices.filter(scrapeDead).length ? `Unbound >${A11Y_DEAD_MIN}m — re-bind is not taking; reboot these` : (m.devices.filter(scrapeFlapping).length ? `${m.devices.filter(scrapeFlapping).length} re-binding after an OTA (normal, self-heals)` : "Accessibility service bound everywhere reporting it"), tone: m.devices.filter(scrapeDead).length ? "red" : "green", icon: "\u2717", query: "a11y:dead" },
-      { label: "Up but stalled", value: stalledDevices.length, context: stalledDevices.length ? "Running, but heartbeat stale — earning nothing" : "Every phone on a job has a fresh heartbeat", tone: stalledDevices.length ? "red" : "green", icon: "\u25D1", query: "stalled:true" },
+      { label: "Up but stalled", value: stalledDevices.length, context: stalledDevices.length ? "Running, but heartbeat stale — earning nothing" : "No stalled heartbeats reported", tone: stalledDevices.length ? "red" : "green", icon: "\u25D1", query: "stalled:true" },
       // The canary runs two instances of the SAME package: a user-0 hub (the "Open Processor
       // to Provide Compute" screen) and the work-profile Processor that actually earns.
       // Guardian's targetOnTop matches on package NAME only, so it reads true for either --
@@ -979,6 +979,7 @@ Click to open \u00b7 Shift-click to select`;
       <div class="drawer-action-group"><span class="drawer-action-label">Control</span><div class="drawer-actions"><button class="button" data-device-action="wake" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Wake</button><button class="button" data-device-action="open_acurast" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Open Acurast</button><button class="button" data-device-action="provision" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Provision</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Update Lite</button>` : ""}<button class="button" data-device-action="reset-fg" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reset FG</button><button class="button" data-device-action="locate" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>📍 Locate</button><button class="button" data-device-action="locate-stop" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Stop</button></div></div>
       <div class="drawer-action-group"><span class="drawer-action-label">Maintenance</span><div class="drawer-actions"><button class="button" data-device-action="pause-15" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for 15 minutes so you can use the phone">⏸ Pause 15m</button><button class="button" data-device-action="pause-60" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for an hour">⏸ Pause 60m</button><button class="button" data-device-action="resume" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="End the maintenance window now">▶ Resume</button></div></div>
       <div class="drawer-danger" role="group" aria-label="Destructive operations"><span class="drawer-danger-label">Danger zone</span>
+        <div class="drawer-danger-row"><div><strong>Recover stale heartbeat</strong><small>Try stopping and relaunching Acurast. Check for a fresh heartbeat afterward.</small></div><button class="button" data-device-action="recover_compute" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Recover compute</button></div>
         <div class="drawer-danger-row"><div><strong>Reboot device</strong><small>Disconnects wireless ADB and stops earning until Guardian restores connectivity.</small></div><button class="button danger" data-device-action="reboot" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reboot</button></div>
         <div class="drawer-danger-row"><div><strong>Forget device</strong><small>Removes it from the fleet and drops its ADB transport. Requires typing FORGET.</small></div><button class="button danger" data-device-action="forget" data-serial="${escapeAttr(serial)}">Forget</button></div>
       </div></section>
@@ -1243,21 +1244,22 @@ function computeBadge(device) {
       }
       return '<span class="muted-cell" title="Compute state hidden while the screensaver covers Lite. Accessibility service is alive, so this is expected, not a fault.">\u2014</span>';
     }
-    const earning = t.earning;            // v1.1.27+: Running AND heartbeat < 15min
+    const earning = t.earning;            // Guardian heartbeat-aware health
     const hbAge = t.heartbeatAgeMin;
     // "up but stalled": Lite still says Running, but the heartbeat has gone quiet, so the phone
     // earns nothing while looking healthy. This is the case computeActive alone cannot see.
-    const stalled = earning === false && active === true;
-    const cls = stalled ? "compute-stalled" : active === true ? "compute-on" : "compute-off";
+    const stalled = U.isComputeStalled(t);
+    const unknownHeartbeat = active === true && (t.heartbeatKnown === false || hbAge == null);
+    const cls = stalled ? "compute-stalled" : unknownHeartbeat ? "compute-off" : active === true ? "compute-on" : "compute-off";
     const dot = stalled ? "\u25D1" : active === true ? "\u25CF" : "\u25CB";
     // "NoDeployments" is the chain's word for "nothing assigned right now" — an ordinary state, not
     // a fault, so it must not read like one. A phone with no job is still Active and heartbeating.
     const noJob = status === "NoDeployments" || active === false;
-    const label = stalled ? "Stalled" : active === true ? "On job" : noJob ? "No job" : (status ? String(status) : "Inactive");
+    const label = stalled ? "Stalled" : unknownHeartbeat ? "On job / heartbeat unknown" : active === true ? "On job" : noJob ? "No job" : (status ? String(status) : "Inactive");
     const bits = [status ? `Compute status: ${status}` : "Compute status unknown"];
     if (earning !== undefined) bits.push(`earning: ${earning}`);
     if (hbAge !== undefined && hbAge !== null) bits.push(`heartbeat ${hbAge}m ago`);
-    if (stalled) bits.push("UP BUT STALLED \u2014 Running with a stale heartbeat, earning nothing");
+    if (stalled) bits.push("UP BUT STALLED \u2014 Active/Running with a stale heartbeat; recovery needed");
     const hb = (hbAge !== undefined && hbAge !== null) ? ` <span class="hb-age">\u2661${hbAge}m</span>` : "";
     return `<span class="${cls}" title="${escapeAttr(bits.join(" \u00b7 "))}">${dot} ${escapeHtml(label)}</span>${hb}`;
   }
@@ -1383,6 +1385,7 @@ function computeBadge(device) {
     if (action === "more") return openDrawer(serial, document.activeElement);
     if (action === "screenshot") return screenshot(serial);
     if (action === "live") return liveScreen(serial);
+    if (action === "recover_compute") return runRemoteAction(action, [serial], "Recover compute");
     if (action === "reboot") return rebootOne(serial);
     if (action === "update") return updateOne(serial);
     if (action === "provision") return provisionDevices([serial], false);
