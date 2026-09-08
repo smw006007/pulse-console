@@ -3,11 +3,28 @@ import ast
 from pathlib import Path
 import re
 import threading
+import time
 import unittest
 from unittest.mock import Mock
 
 
 class RecoveryTest(unittest.TestCase):
+    def test_native_recovery_interlock_expires_but_operator_maintenance_does_not(self):
+        source = Path(__file__).resolve().parent / 'fleet.py'
+        tree = ast.parse(source.read_text(encoding='utf-8'))
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_in_maintenance')
+        sample = {'recv_ts': time.time(), 'heartbeatRecoveryActive': True, 'guardianState': 'TARGET_FOREGROUND'}
+        ns = dict(CFG={'guardian_canary_serials': ['canary']}, STATE_LOCK=threading.Lock(),
+                  SERIAL_IP={'phone': 'ip'}, TELEMETRY={'ip': sample}, TELEMETRY_TTL=900,
+                  time=time, _dedupe_base=lambda s: s)
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(source), 'exec'), ns)
+        self.assertTrue(ns['_in_maintenance']('phone'))
+        sample['recv_ts'] -= 121
+        self.assertFalse(ns['_in_maintenance']('phone'))
+        sample['guardianState'] = 'MAINTENANCE_MODE'
+        self.assertTrue(ns['_in_maintenance']('phone'))
+        self.assertTrue(ns['_in_maintenance']('canary'))
+
     def action(self, source, replies, installed=(0, 11), profiles=(11,), legacy=False):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "recover_compute")

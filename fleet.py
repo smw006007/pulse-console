@@ -2677,13 +2677,16 @@ def _in_maintenance(serial):
     ENABLE_PROTECTION, which yanks Lite back to the foreground — exactly what maintenance mode exists
     to prevent. Unknown/stale telemetry returns False so the sweeper still protects silent phones.
     """
+    if serial in CFG.get("guardian_canary_serials", []):
+        return True
     now = time.time()
     with STATE_LOCK:
         cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
         for c in cands:
             t = TELEMETRY.get(c) if c else None
             if t and (now - t.get("recv_ts", 0)) < TELEMETRY_TTL:
-                return "MAINTENANCE" in str(t.get("guardianState") or "").upper()
+                return ("MAINTENANCE" in str(t.get("guardianState") or "").upper() or
+                        (t.get("heartbeatRecoveryActive") is True and now - t.get("recv_ts", 0) < 120))
     return False
 
 
@@ -2708,6 +2711,8 @@ def _idle_needing_update(target_version):
     with STATE_LOCK:
         online = [(sv, d) for sv, d in STATE.items() if d.get("state") == "device"]
     for serial, d in online:
+        if _in_maintenance(serial):
+            continue
         if (d.get("guardianVersion") or "") == target_version:
             continue
         cands = [SERIAL_IP.get(serial), SERIAL_IP.get(_dedupe_base(serial)), serial.split(":")[0]]
