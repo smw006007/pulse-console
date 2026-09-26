@@ -25,6 +25,7 @@ import shutil
 import sqlite3
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -4037,6 +4038,15 @@ def wedge_loop():
 
 
 def main():
+    # Windows consoles default to a legacy codepage (cp1252), which cannot encode the arrows and
+    # symbols used in status lines - printing one raises UnicodeEncodeError and kills the process
+    # before it serves anything. Redirecting output to a file hits it too, since Python then uses
+    # the locale encoding. Degrade the characters instead of the program.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     threading.Thread(target=poll_loop, daemon=True).start()
     threading.Thread(target=version_loop, daemon=True).start()
     threading.Thread(target=acurast_loop, daemon=True).start()
