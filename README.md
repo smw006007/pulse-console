@@ -95,6 +95,14 @@ Requires Android 11+ and the console machine being able to reach the phone (same
 That's it. The phone appears on the grid, and everything after — health, reboots, screenshots, live
 control, Guardian install/provision — is driven from the console.
 
+Onboarding pauses Guardian for one epoch (90 min) as soon as the phone connects, installs and
+provisions it, then ends the pause once it reports armed. The pause is a backstop, not a duration:
+it expires on its own if the run fails partway, and a phone with no Guardian yet simply carries on.
+
+Re-running **Onboard** on a phone that is *already* connected works — it matches the paired host's
+address rather than waiting for a serial it has never seen, so a repeat pass provisions instead of
+silently doing nothing.
+
 > It's forgiving about the port: paste just the IP, or either port (connect *or* pairing) — it
 > auto-resolves the correct `_adb-tls-pairing` port from mDNS.
 
@@ -111,6 +119,32 @@ is also skipped by bulk reboots instead of being rebooted out from under you.
 
 The console asks the phone for its current state before treating it as paused, so a Guardian too old
 to understand the broadcast is simply never counted as paused — it is never assumed.
+
+### Fleet roster — which phones are *missing*
+
+The device grid can only show what ADB can currently see, so it can never answer the question that
+matters during a recovery: **what is absent?** **Roster** answers it. Every phone the console has
+ever seen is recorded (keyed by its on-chain processor address, because a phone accumulates several
+transport serials and DHCP reshuffles IPs), and the roster lists them green for connected and grey
+for missing, longest-gone first.
+
+Pair it with **Mark all**: every reachable phone turns its screen solid green for 15 minutes —
+silent, no alarm, no vibration — and pauses Guardian for the same window. Anything still dark in the
+rack is a phone the console cannot reach. That is the fastest way to find them physically, since a
+phone that is missing is by definition one you cannot send anything to.
+
+Requires Pulse Guardian 1.3.0+ for the quiet green marker; older builds show the red locate beacon
+instead, which is louder but still tells you which phone is which.
+
+### Wedged processor detection
+
+A processor can stop heartbeating for hours while every other signal reads healthy: the process is
+alive, the app is foreground, ADB is connected, nothing crashes. The console flags it as **Wedged**
+when the processor's check-in service is still wanted by Android but has done nothing since the
+moment it was created — started, then inert.
+
+Absolute age cannot be used for this: healthy phones carry old check-in records routinely. It is the
+gap between creation and last activity that distinguishes a wedged processor from an idle one.
 
 ### Guardian updates — idle phones only
 Installing on a phone that is holding a job can cost it that job. With `opportunistic_update` on, the

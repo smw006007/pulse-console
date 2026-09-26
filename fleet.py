@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     "token": "",                    # optional shared secret required for reboot actions
     "poll_seconds": 6,              # how often to refresh adb state + reconnect
     "thermal_poll_seconds": 45,     # how often to probe device metrics over adb (read-only)
+    "wedge_poll_seconds": 300,     # how often to check for a wedged processor (read-only dumpsys)
     "metrics_retention_days": 7,    # how long the SQLite metrics history is kept (auto-pruned hourly)
     "mdns_autoconnect": True,       # auto-discover + connect Android 11+ wireless-debugging devices
     "batch": {"wave_size": 8, "wave_delay_sec": 20},
@@ -121,6 +122,11 @@ DEFAULT_CONFIG = {
         "expected_cert_sha256": "ea21af13f3b724c662f3da05247acc5a68a45331a90220f0d90a6024d7fa8f36",
         "include_prereleases": False,   # rc/canary tags are skipped unless True
         "auto_download": True,          # fetch+verify newest automatically; NEVER auto-installs
+        # The Lite build the fleet should be on. Blank = track whatever is newest (the default).
+        # Set it to a version (e.g. "1.26.0") to hold the fleet there: the console then verifies and
+        # offers THAT build, and a phone on anything else — newer included — reads as needing an
+        # update, so a deliberate rollback converges instead of being undone by the next update run.
+        "target_version": "",
         "poll_minutes": 60,
         "wave_size": 4,                 # push in small waves (each install streams ~190MB over Wi-Fi)
         "wave_delay_sec": 15,
@@ -224,6 +230,59 @@ def remember_device(serial, **facts):
 
 
 load_device_state()
+
+
+# ------------------------------------------------------------------ ROSTER
+# STATE is in-memory and holds only what adb can see right now, so it can never answer the one
+# question that matters during a recovery: WHICH PHONES ARE MISSING. DEVICE_STATE is the only
+# thing that survives a restart, so it is the roster. Keyed by on-chain address, not serial:
+# a phone accumulates several transport serials ("... (2)._adb-tls-connect._tcp") and DHCP
+# reshuffles IPs, but its processor address is stable for the life of the handset.
+LAST_SEEN_GRANULARITY_S = 300   # coarse, so we rewrite device_state.json at most once per 5 min/phone
+
+
+def mark_seen(serial):
+    """Stamp a coarse lastSeen so the roster can age a missing phone. Coarse on purpose:
+    remember_device() rewrites the whole JSON, so a per-poll stamp would thrash the disk."""
+    stamp = int(time.time() // LAST_SEEN_GRANULARITY_S) * LAST_SEEN_GRANULARITY_S
+    with DEVICE_STATE_LOCK:
+        prev = (DEVICE_STATE.get(serial) or {}).get("lastSeen")
+    if prev != stamp:
+        remember_device(serial, lastSeen=stamp)
+
+
+def build_roster(online_serials):
+    """Every processor ever seen, with live status. One row per address."""
+    now = time.time()
+    with DEVICE_STATE_LOCK:
+        items = list(DEVICE_STATE.items())
+    online_addr = set()
+    with STATE_LOCK:
+        for ser in online_serials:
+            a = (STATE.get(ser) or {}).get("address")
+            if a:
+                online_addr.add(a)
+    by_addr = {}
+    for serial, facts in items:
+        addr = facts.get("address")
+        if not addr:
+            continue                      # no address yet -> cannot be identified across serials
+        row = by_addr.setdefault(addr, {
+            "address": addr, "serials": [], "online": addr in online_addr,
+            "codename": facts.get("codename"), "alias": facts.get("alias"),
+            "guardianVersion": facts.get("guardianVersion"), "lastSeen": 0,
+        })
+        row["serials"].append(serial)
+        row["lastSeen"] = max(row["lastSeen"] or 0, facts.get("lastSeen") or 0)
+        for k in ("codename", "alias", "guardianVersion"):
+            if not row.get(k) and facts.get(k):
+                row[k] = facts[k]
+    rows = list(by_addr.values())
+    for r in rows:
+        r["missingSec"] = None if r["online"] else (int(now - r["lastSeen"]) if r["lastSeen"] else None)
+    # missing first, longest-gone at the top; online rows after, by codename
+    rows.sort(key=lambda r: (r["online"], -(r["missingSec"] or 0), (r.get("codename") or "")))
+    return rows
 
 # Guardian health telemetry, keyed by the device's reported Wi-Fi IP. Merged into cards by IP.
 TELEMETRY = {}
@@ -1236,6 +1295,42 @@ def reboot_batch(serials, wave_size, wave_delay, force=False):
     return skipped
 
 
+_IP_SRC = re.compile(r"src (\d+\.\d+\.\d+\.\d+)")
+
+
+def backfill_serial_ips():
+    """Ask a connected phone for its own Wi-Fi IP when mDNS never told us.
+
+    SERIAL_IP is otherwise populated ONLY from mDNS advertisements, so a phone connected over a
+    saved transport that is no longer advertising ends up with no IP at all. That is not cosmetic:
+      * TELEMETRY is keyed by IP, so Guardian's health fields never merge onto the card;
+      * _adb_visible_ips() is built from SERIAL_IP, so the phone looks INVISIBLE to adb -- which
+        makes adbVisible report false and, worse, makes readb classify a healthy handset as
+        stranded and toggle its wireless debugging.
+    Observed on 25 of 67 connected phones after mDNS coverage collapsed. The device knows its own
+    address, so just ask it.
+    """
+    with STATE_LOCK:
+        need = [sv for sv, d in STATE.items() if d.get("state") == "device" and not SERIAL_IP.get(sv)]
+    if not need:
+        return
+
+    def one(serial):
+        code, out, _ = adb(["-s", serial, "shell", "ip", "route", "get", "1.1.1.1"], timeout=12)
+        if code != 0:
+            return
+        m = _IP_SRC.search(out or "")
+        if m:
+            with STATE_LOCK:
+                SERIAL_IP[serial] = m.group(1)
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(one, need))
+    except Exception as e:  # noqa: BLE001
+        print(f"[ip-backfill] {e}")
+
+
 def poll_loop():
     """Refresh state first (one fast `adb devices` call) so the UI is always current, then attempt
     reconnects in PARALLEL — otherwise 130 offline devices would serialize for many minutes."""
@@ -1249,6 +1344,7 @@ def poll_loop():
                     list(ex.map(lambda h: connect(h, timeout=6), need))
             if CFG.get("mdns_autoconnect", True):
                 discover_mdns()
+            backfill_serial_ips()   # mDNS is not the only way to learn a phone's IP
             if need:
                 refresh_devices()  # pick up anything that just connected
         except Exception as e:  # noqa: BLE001
@@ -1320,18 +1416,18 @@ def recover_compute(serial):
     candidates = [u for u in installed if u in profiles]
     # Never guess user 0 when another instance exists or profile discovery failed.
     user = candidates[0] if len(candidates) == 1 else (0 if installed == [0] else None)
-    stop_note = "Processor profile ambiguous; Guardian will handle recovery."
+    stop_note = "Processor profile ambiguous; relaunch only."
     if user is not None:
         code, out, err = adb(["-s", serial, "shell", "am", "force-stop", "--user", str(user), TARGET_PKG], timeout=20)
         stopped = code == 0 and not any(word in (out + err).lower() for word in ("exception", "error", "denied"))
-        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; Guardian will handle recovery."
+        stop_note = "Force-stop completed." if stopped else "Android blocked force-stop; relaunch only."
     if modern:
         code, out, err = adb(command, timeout=20)
         ok = code == 0 and "compute_recovery_supported" in out
     else:
         ok = foreground_lite(serial)
     return {"serial": serial, "ok": ok,
-            "output": stop_note + (" Guardian recovery requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
+            "output": stop_note + (" Guardian relaunch requested. Recovery is unverified until a fresh Acurast heartbeat is observed."
                                    if ok else " Guardian relaunch failed; manual attention required.")}
 
 
@@ -1406,6 +1502,12 @@ def live_prep(serial, wait_s=12):
     live view worked on some phones and not others, varying per attempt. ws-scrcpy discovers servers
     with `ps -A | grep <name>` regardless of who started them, so starting it here is reused, not
     duplicated (a second start would collide on 8886)."""
+    # The jar was only ever pushed at provision time, so a phone onboarded before that code (or one
+    # whose /data/local/tmp was cleared) has nothing to run: app_process prints "Aborted", the server
+    # never binds, and live view fails with no error surfaced anywhere. Ensuring it here — one `ls`
+    # on the happy path — is what actually guarantees the jar is present whenever live is requested.
+    ensure_scrcpy_jar(serial)
+
     def running():
         _, out, _ = adb(["-s", serial, "shell",
                          "ps -A -o ARGS | grep com.genymobile.scrcpy | grep -v grep | wc -l"], timeout=12)
@@ -1556,12 +1658,17 @@ def download_and_verify(url, asset_name):
 
 
 def check_release():
-    """Find the newest processor-lite-<ver>.apk across releases, download+verify it, and record it."""
+    """Find the processor-lite-<ver>.apk the fleet should be on, download+verify it, and record it.
+
+    That is the newest release by default, or exactly updates.target_version when one is pinned —
+    which is how a rollback holds: pinning 1.26.0 makes 1.26.0 the build the console verifies and
+    offers, so nothing pushes the fleet back onto a bad newer release behind your back."""
     ucfg = CFG.get("updates", {})
     if not ucfg.get("enabled", True):
         return
     repo = ucfg.get("repo", "Acurast/acurast-processor-update")
     incl_pre = bool(ucfg.get("include_prereleases", False))
+    target = str(ucfg.get("target_version") or "").strip()
     url = f"https://api.github.com/repos/{repo}/releases?per_page=30"
     try:
         rels = _http_get_json(
@@ -1580,11 +1687,16 @@ def check_release():
             if not m:
                 continue
             vt = _semver_tuple(m.group(1))
-            if best is None or vt > best[0]:
-                best = (vt, m.group(1), a.get("name"), a.get("browser_download_url"), r.get("published_at", ""))
+            if target:
+                if m.group(1) != target:
+                    continue          # pinned: only the target build is a candidate, newest is not
+            elif best is not None and vt <= best[0]:
+                continue
+            best = (vt, m.group(1), a.get("name"), a.get("browser_download_url"), r.get("published_at", ""))
     if not best:
         with RELEASE_LOCK:
-            RELEASE["error"] = "no processor-lite asset found in releases"
+            RELEASE["error"] = (f"target_version {target} not found in {repo} releases" if target
+                                else "no processor-lite asset found in releases")
             RELEASE["checkedAt"] = time.time()
         return
     _vt, ver, name, dl, pub = best
@@ -1610,7 +1722,7 @@ def check_release():
         RELEASE.update({
             "checkedAt": time.time(), "versionName": ver, "assetName": name, "url": dl,
             "publishedAt": pub, "path": path if ready else "", "certOk": cert_ok, "packageOk": pkg_ok,
-            "ready": ready, "error": err, "certHashes": hashes,
+            "ready": ready, "error": err, "certHashes": hashes, "targetVersion": target,
             "sizeBytes": (os.path.getsize(path) if path and os.path.exists(path) else 0),
         })
     if ready:
@@ -1639,7 +1751,11 @@ def update_device(serial, allow_downgrade=False):
     with STATE_LOCK:
         if serial in STATE:
             STATE[serial]["action"] = "updating"
-    args = ["-s", serial, "install", "-r"] + (["-d"] if allow_downgrade else []) + [path]
+    # A pinned target is a deliberate desired state, and converging on it can mean going backwards,
+    # which pm rejects without -d. Pass it whenever a target is set, or the hold silently no-ops on
+    # exactly the phones it exists to fix.
+    pinned_target = bool(str(CFG.get("updates", {}).get("target_version") or "").strip())
+    args = ["-s", serial, "install", "-r"] + (["-d"] if (allow_downgrade or pinned_target) else []) + [path]
     code, out, err = adb(args, timeout=300)
     blob = f"{out}\n{err}".strip()
     ok = code == 0 and "Success" in blob
@@ -1735,6 +1851,12 @@ SETUP_SCHEMA = [
     {"path": "updates.repo", "label": "Processor release repo", "kind": "text",
      "group": "processor", "default": "Acurast/acurast-processor-update",
      "hint": "Acurast's public release page. No access token needed."},
+    {"path": "updates.target_version", "label": "Hold Processor at version", "kind": "text",
+     "group": "processor", "default": "", "placeholder": "newest",
+     "hint": "Leave blank to track the newest release. Set a version (e.g. 1.26.0) to hold the fleet "
+             "there — the console verifies and offers that build instead, and phones on anything else, "
+             "newer included, show as needing an update. Use this to make a rollback stick: without it "
+             "the next update run puts the fleet straight back on the build you rolled away from."},
     {"path": "updates.poll_minutes", "label": "Check every (minutes)", "kind": "int",
      "group": "processor", "default": "60", "hint": "Minimum 10."},
     {"path": "updates.expected_cert_sha256", "label": "Required signing key", "kind": "text",
@@ -2112,7 +2234,12 @@ def reset_fg_losses(serials):
         return list(ex.map(reset_fg_one, serials))
 
 
-def locate_one(serial, seconds=120, label=""):
+# A quiet mark pauses Guardian for the same window it is displayed, so an operator walking the
+# rack is not fighting foreground reclaim on every phone they pick up. Self-expiring, as always.
+QUIET_MARK_MAINTENANCE_MIN = 15
+
+
+def locate_one(serial, seconds=120, label="", quiet=False):
     """Fire the LOCATE beacon (red overlay + alarm + vibrate) so the operator can find the handset.
     Draws over everything incl. the processor without disturbing the node (needs SYSTEM_ALERT_WINDOW,
     already granted fleet-wide). Label is sanitized for the on-device shell."""
@@ -2120,8 +2247,21 @@ def locate_one(serial, seconds=120, label=""):
     args = ["-s", serial, "shell", "am", "broadcast", "--user", "0", "-f", "0x00000020",
             "-n", f"{GUARDIAN_PKG}/{GUARDIAN_CLASS_PKG}.core.receiver.ProvisioningReceiver", "-a", GUARDIAN_LOCATE_ACTION,
             "--ei", "seconds", str(max(1, int(seconds))), "--es", "label", lbl]
+    if quiet:
+        args += ["--ez", "quiet", "true"]
     _, out, err = adb(args, timeout=15)
-    return {"serial": serial, "ok": "locating" in (out + " " + err), "output": (out + " " + err).strip()[:120]}
+    blob = out + " " + err
+    ok = "locating" in blob          # matches both "locating" and "locating_quiet"
+    paused = None
+    if ok and quiet:
+        # Older Guardian ignores the extra and shows the red beacon; the pause still applies, and
+        # the operator sees a red screen instead of green, which is a legible "this one is stale".
+        paused = maintenance_one(serial, True, QUIET_MARK_MAINTENANCE_MIN).get("ok")
+    res = {"serial": serial, "ok": ok, "output": blob.strip()[:120]}
+    if quiet:
+        res["quiet"] = True
+        res["paused"] = paused
+    return res
 
 
 def screensaver_one(serial, enabled):
@@ -3111,6 +3251,12 @@ def heartbeat_scan_loop():
 def snapshot():
     with STATE_LOCK:
         devices = [dict(d) for d in STATE.values()]
+    _online_serials = [d["serial"] for d in devices if d.get("state") == "device" and d.get("serial")]
+    for _s in _online_serials:
+        try:
+            mark_seen(_s)
+        except Exception:
+            pass            # roster bookkeeping must never break the snapshot
     devices.sort(key=lambda d: d["label"].lower())
     counts = {"device": 0, "offline": 0, "unauthorized": 0, "rebooting": 0}
     version_summary = {}
@@ -3133,20 +3279,37 @@ def snapshot():
     behind = 0
     with RELEASE_LOCK:
         rel = {k: RELEASE.get(k) for k in (
-            "versionName", "assetName", "publishedAt", "certOk", "packageOk",
+            "versionName", "assetName", "publishedAt", "certOk", "packageOk", "targetVersion",
             "ready", "error", "checkedAt", "sizeBytes")}
     rel_t = _semver_tuple(rel["versionName"]) if rel.get("versionName") else None
     update_count = 0
     for d in devices:
         vc = d.get("versionCode", 0)
-        d["behind"] = bool(vc and latest_code and vc < latest_code)
-        if d["behind"]:
-            behind += 1
-        # updateAvailable = a verified newer LITE release exists AND this device is on an older version.
+        # updateAvailable = a verified LITE build is ready AND this device is not on it. With no
+        # target pinned that means "older than newest"; with one pinned it means "not the target",
+        # so a phone sitting on a newer build we rolled back from is correctly flagged as needing it.
         inst_t = _semver_tuple(d.get("version", "")) if (d.get("version") and d["version"][:1].isdigit()) else None
-        d["updateAvailable"] = bool(rel.get("ready") and rel_t and inst_t and inst_t < rel_t)
+        # Under a pinned target compare the version STRING, not the parsed tuple: _semver_tuple only
+        # keeps the first three integers, so "1.27.1-rc1" and "1.27.1" both read as (1,27,1) and a
+        # whole fleet of release-candidate phones would look already-current and never be offered the
+        # stable build. check_release() matches the target by exact name, so this matches it the same way.
+        if rel.get("targetVersion"):
+            d["updateAvailable"] = bool(rel.get("ready") and inst_t
+                                        and (d.get("version") or "") != rel.get("targetVersion"))
+        else:
+            d["updateAvailable"] = bool(rel.get("ready") and rel_t and inst_t and inst_t < rel_t)
         if d["updateAvailable"]:
             update_count += 1
+        # "behind" normally means "below the highest version seen across the fleet". Under a pinned
+        # target that reading is wrong in the worst way: a correctly rolled-back phone sits below the
+        # phones still on the bad build and would be flagged as the laggard. When a target is set,
+        # behind means the only thing it can mean — not on the target.
+        if rel.get("targetVersion"):
+            d["behind"] = d["updateAvailable"]
+        else:
+            d["behind"] = bool(vc and latest_code and vc < latest_code)
+        if d["behind"]:
+            behind += 1
         with STATE_LOCK:
             _c = [SERIAL_IP.get(d["serial"]), SERIAL_IP.get(_dedupe_base(d["serial"])), d["serial"].split(":")[0]]
             ip = next((c for c in _c if c and TELEMETRY.get(c) and (now - TELEMETRY[c].get("recv_ts", 0)) < TELEMETRY_TTL), None) or _c[0] or _c[2]
@@ -3254,6 +3417,7 @@ def snapshot():
         HEARTBEAT_SCANNER.attach(device)
     return {
         "devices": devices,
+        "roster": build_roster(_online_serials),
         "heartbeatScan": HEARTBEAT_SCANNER.status(),
         "counts": counts,
         "total": len(devices),
@@ -3457,6 +3621,15 @@ class Handler(BaseHTTPRequestHandler):
                         pass  # partial-address resolution must NEVER break telemetry ingest
             resp = {"ok": bool(ip)}
             try:
+                # Tell the phone whether the console can actually SEE it on adb. Telemetry
+                # succeeding only proves the console is reachable over HTTP; the board is driven by
+                # adb, so a stranded phone posts fine and still never appears. Guardian surfaces
+                # this in its notification so an operator standing at the handset can tell
+                # "on the board" from "reachable but invisible" without walking back to a screen.
+                resp["adbVisible"] = bool(ip and ip in _adb_visible_ips())
+            except Exception:
+                pass  # visibility hint must NEVER break telemetry ingest
+            try:
                 cmds = readb_command_for(body.get("uuid", ""), ip)
                 if cmds:
                     resp["commands"] = cmds
@@ -3571,11 +3744,15 @@ class Handler(BaseHTTPRequestHandler):
                 with ThreadPoolExecutor(max_workers=8) as ex:
                     results = list(ex.map(locate_stop_one, serials))
             else:
-                seconds = int(body.get("seconds", 120))
+                quiet = bool(body.get("quiet"))
+                # The marker should outlast the maintenance window it opens, otherwise the screen
+                # goes dark while Guardian is still paused and the rack looks half-marked.
+                default_secs = (QUIET_MARK_MAINTENANCE_MIN * 60) if quiet else 120
+                seconds = int(body.get("seconds") or default_secs)
                 with STATE_LOCK:
                     labels = {sv: ((STATE.get(sv) or {}).get("alias") or (STATE.get(sv) or {}).get("label") or sv) for sv in serials}
                 with ThreadPoolExecutor(max_workers=8) as ex:
-                    results = list(ex.map(lambda sv: locate_one(sv, seconds, labels.get(sv, sv)), serials))
+                    results = list(ex.map(lambda sv: locate_one(sv, seconds, labels.get(sv, sv), quiet), serials))
             ok = sum(1 for r in results if r["ok"])
             self._send(200, json.dumps({"ok": True, "located": ok, "total": len(results), "stop": bool(body.get("stop")), "results": results}))
         elif path == "/api/guardian/opportunistic":
@@ -3760,6 +3937,105 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
 
+# ------------------------------------------------------------------ WEDGED PROCESSOR
+# A processor can stop heartbeating for hours while looking perfectly healthy: the process is
+# alive, the app is foreground, adb is connected, nothing crashes. Observed in the field:
+# five hours, zero heartbeats. The tell is in ServiceRecord state, not in logcat (1.27.2 strips
+# the debug logging that used to expose it):
+#
+#   CheckInService  startRequested=true
+#                   createTime   = -4h49m50s361ms
+#                   lastActivity = -4h49m50s359ms   <- 2ms apart
+#
+# The system still wants the service running, but it has done nothing since the instant it was
+# created. Healthy phones carry CheckInService records too, so AGE ALONE IS USELESS - theirs run
+# 7-12 days old with startRequested=false. The delta is what discriminates: across 40 records on
+# the live fleet, not one healthy record had startRequested=true with a near-zero delta.
+WEDGE_WATCH_SERVICE = "CheckInService"
+WEDGE_INERT_DELTA_S = 5.0      # create ~= lastActivity -> never progressed
+WEDGE_MIN_AGE_S = 3600.0       # 2x the 30-minute heartbeat cadence
+_WEDGE_REC = re.compile(r"ServiceRecord\{[^}]*\s+u(\d+)\s+" + re.escape(TARGET_PKG_DEFAULT) + r"/([^\s}]+)\}")
+_WEDGE_DUR = re.compile(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?(?:(\d+)ms)?$")
+
+
+def _wedge_secs(token):
+    """Parse Android's '-4h49m50s361ms' relative duration into seconds."""
+    token = (token or "").strip().lstrip("-")
+    if not token or token == "--":
+        return None
+    m = _WEDGE_DUR.match(token)
+    if not m or not any(m.groups()):
+        return None
+    d, h, mi, sec, ms = [int(x) if x else 0 for x in m.groups()]
+    return d * 86400 + h * 3600 + mi * 60 + sec + ms / 1000.0
+
+
+def wedge_probe(serial):
+    """Read ServiceRecord state for the processor. Returns {wedged, reason, checkedAt} or None."""
+    pkg = (CFG.get("processor", {}) or {}).get("package") or TARGET_PKG_DEFAULT
+    code, out, _ = adb(["-s", serial, "shell", "dumpsys", "activity", "services", pkg], timeout=25)
+    if code != 0:
+        return None                      # probe failed -> unknown, say nothing
+    if "ServiceRecord" not in (out or ""):
+        # dumpsys answered "(nothing)": no services registered right now. A wedged phone
+        # always HAS a CheckInService record, so this is a definite not-wedged, not a gap.
+        return {"wedged": False, "checkedAt": time.time(), "reason": "", "inertMin": None,
+                "noRecords": True}
+    cur, services = None, []
+    for line in out.splitlines():
+        m = _WEDGE_REC.search(line)
+        if m:
+            cur = {"name": m.group(2).split(".")[-1]}
+            services.append(cur)
+            continue
+        if cur is None:
+            continue
+        for key in ("createTime", "lastActivity"):
+            mm = re.search(key + r"=(\S+)", line)
+            if mm and key not in cur:
+                cur[key] = mm.group(1)
+        mm = re.search(r"startRequested=(\w+)", line)
+        if mm and "startRequested" not in cur:
+            cur["startRequested"] = mm.group(1)
+    for svc in services:
+        if WEDGE_WATCH_SERVICE not in svc.get("name", ""):
+            continue
+        if str(svc.get("startRequested", "")).lower() != "true":
+            continue
+        created = _wedge_secs(svc.get("createTime"))
+        last = _wedge_secs(svc.get("lastActivity"))
+        if created is None or last is None:
+            continue
+        if abs(created - last) < WEDGE_INERT_DELTA_S and last > WEDGE_MIN_AGE_S:
+            return {"wedged": True, "checkedAt": time.time(),
+                    "reason": "%s inert %.0f min" % (WEDGE_WATCH_SERVICE, last / 60.0),
+                    "inertMin": round(last / 60.0, 1)}
+    return {"wedged": False, "checkedAt": time.time(), "reason": "", "inertMin": None}
+
+
+def wedge_loop():
+    interval = max(60, int(CFG.get("wedge_poll_seconds", 300)))
+    time.sleep(25)   # let the first adb poll connect devices
+    while True:
+        try:
+            with STATE_LOCK:
+                online = [s for s, d in STATE.items() if d.get("state") == "device"]
+            if online:
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    for serial, result in zip(online, ex.map(wedge_probe, online)):
+                        if result is None:
+                            continue
+                        with STATE_LOCK:
+                            d = STATE.get(serial)
+                            if d is not None:
+                                d["wedge"] = result
+                        if result.get("wedged"):
+                            print("[wedge] %s: %s" % (serial[:26], result.get("reason")))
+        except Exception as e:  # noqa: BLE001
+            print(f"[wedge] {e}")
+        time.sleep(interval)
+
+
 def main():
     threading.Thread(target=poll_loop, daemon=True).start()
     threading.Thread(target=version_loop, daemon=True).start()
@@ -3773,6 +4049,7 @@ def main():
     threading.Thread(target=discovery_heal_loop, daemon=True).start()
     threading.Thread(target=idle_hub_loop, daemon=True).start()
     threading.Thread(target=heartbeat_scan_loop, daemon=True).start()
+    threading.Thread(target=wedge_loop, daemon=True).start()
     # Restarting THIS service kills the adb server with it: the server is spawned by our own adb
     # calls, so it lives in this unit's cgroup. A fresh one starts on the next command, and
     # ws-scrcpy stays bound to the dead one — unit still "active", still answers 200, device list

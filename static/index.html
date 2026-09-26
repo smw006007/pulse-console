@@ -53,6 +53,9 @@
           <button class="button" type="button" data-open-dialog="importDlg"><span aria-hidden="true">＋</span> Import</button>
           <button class="button" type="button" data-action="open-analytics"><span aria-hidden="true">⌁</span> Analytics</button>
           <button class="button primary" type="button" data-action="discover"><span aria-hidden="true">⌖</span> Discover</button>
+          <button class="button primary mobile-only" type="button" data-action="open-onboard"><span aria-hidden="true">＋</span> Onboard</button>
+          <button class="button" type="button" data-action="open-roster"><span aria-hidden="true">●</span> Roster</button>
+          <button class="button" type="button" data-action="mark-quiet-online" title="Green screen on every reachable phone for 15 min, silent. Whatever stays dark is not on the console."><span aria-hidden="true">■</span> Mark all</button>
           <button class="button command-button" type="button" data-action="open-palette" aria-label="Open command palette" title="Search devices and run fleet commands"><span aria-hidden="true">⌕</span> Commands <kbd id="paletteHint">Ctrl K</kbd></button>
           <button class="icon-button" type="button" data-action="open-shortcuts" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
           <button class="icon-button" type="button" data-action="open-options" aria-label="Console options" title="Console options — what to show, refresh rate, density">⚙</button>
@@ -137,7 +140,7 @@
           <div class="workflow-step"><span class="step-number">04</span><div><h3>Grant and arm</h3><p>Apply permissions, WD recovery, and fleet-mode protection.</p><div class="button-row"><button class="button primary" type="button" data-action="provision-selected">Provision selected</button><button class="button" type="button" data-action="provision-online">Provision all online</button></div></div></div>
         </div>
         <div id="guardianProgress" class="job-progress"></div>
-        <div class="guardian-utilities"><div><span class="eyebrow">FLEET UTILITIES</span><p>Onboard phones, manage reversible debloat, inspect readiness drift, or enable the legacy Keep-Lite fallback.</p></div><div class="button-row"><button class="button" type="button" data-action="open-onboard">＋ Onboard phone</button><button class="button" type="button" data-action="open-debloat">⌁ Debloat</button><button class="button" type="button" data-action="show-readiness">Readiness details</button><button id="keepLiteButton" class="button" type="button" aria-pressed="false" data-action="toggle-keep-lite">Keep Lite · off</button><button id="screensaverButton" class="button" type="button" data-action="toggle-screensaver" title="Black screen with a bouncing green dot while Lite is foreground. Locate still works on top.">Screensaver · off</button><button class="button" type="button" data-action="reset-fg-fleet">↺ Reset FG losses</button></div></div>
+        <div class="guardian-utilities"><div><span class="eyebrow">FLEET UTILITIES</span><p>Onboard phones, manage reversible debloat, inspect readiness drift, or enable the legacy Keep-Lite fallback.</p></div><div class="button-row"><button class="button" type="button" data-action="open-onboard">＋ Onboard phone</button><button class="button" type="button" data-action="open-debloat">⌁ Debloat</button><button class="button" type="button" data-action="show-readiness">Readiness details</button><button id="keepLiteButton" class="button" type="button" aria-pressed="false" data-action="toggle-keep-lite">Keep Lite · off</button><button id="screensaverButton" class="button" type="button" data-action="toggle-screensaver" title="Black screen with a bouncing green dot while Lite is foreground. Locate still works on top.">Screensaver · off</button><button class="button" type="button" data-action="mark-quiet-online">■ Mark all (quiet)</button><button class="button" type="button" data-action="mark-quiet-stop">□ Clear marks</button><button class="button" type="button" data-action="reset-fg-fleet">↺ Reset FG losses</button></div></div>
       </section>
 
       <section id="device-region" class="section devices-section" aria-labelledby="devicesHeading">
@@ -285,6 +288,15 @@
     </form>
   </dialog>
 
+  <dialog id="rosterDlg" class="wide-dialog operation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">FLEET ROSTER</span><h2>Every phone we have ever seen</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <p id="rosterSummary">Loading…</p>
+      <div id="rosterList" class="pairing-list"></div>
+      <div class="dialog-actions"><button class="button" value="cancel">Close</button></div>
+    </form>
+  </dialog>
+
   <dialog id="onboardDlg" class="wide-dialog operation-dialog">
     <form method="dialog" id="onboardForm">
       <div class="dialog-heading"><div><span class="eyebrow">WIRELESS ADB ONBOARDING</span><h2>Onboard a new phone</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
@@ -292,7 +304,7 @@
       <div class="dialog-toolbar"><span>Phones waiting to pair</span><button class="button" type="button" data-action="pairing-refresh">Refresh scan</button></div>
       <div id="pairingList" class="pairing-list"><div class="drawer-empty">Scanning for pairing-mode phones…</div></div>
       <div class="form-grid"><label>Pairing host<input id="pairingHost" type="text" placeholder="192.168.1.41:37123" autocomplete="off"></label><label>Six-digit code<input id="pairingCode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" autocomplete="one-time-code"></label></div>
-      <label class="toggle-row"><input id="onboardFull" type="checkbox" checked> <span>Install Guardian and provision automatically after pairing</span></label>
+      <label class="toggle-row"><input id="onboardFull" type="checkbox" checked> <span>Pause Guardian, then install and provision automatically after pairing</span></label>
       <pre id="onboardLog" class="operation-log" hidden></pre>
       <div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button id="onboardSubmit" class="button primary" value="default">Pair and onboard</button></div>
     </form>

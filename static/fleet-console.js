@@ -111,6 +111,35 @@
     return `${Number(value).toFixed(digits == null ? 0 : digits)}${unit || ""}`;
   }
 
+  // ---- held-version helpers -------------------------------------------------
+  // When updates.target_version is set the console holds the fleet at a specific Lite build, which
+  // can mean moving a phone BACKWARDS. Calling that "Update" is wrong and it is the kind of wrong
+  // that gets a rollback undone by someone clicking the obvious button, so the wording follows the
+  // actual direction of travel.
+  function semverParts(value) {
+    const m = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  }
+
+  function heldVersion() {
+    return ((app.data && app.data.release) || {}).targetVersion || "";
+  }
+
+  function isRollback(device) {
+    if (!heldVersion()) return false;
+    const from = semverParts(device && device.version);
+    const to = semverParts(((app.data && app.data.release) || {}).versionName);
+    if (!from || !to) return false;
+    for (let i = 0; i < 3; i += 1) {
+      if (from[i] !== to[i]) return from[i] > to[i];
+    }
+    return false;
+  }
+
+  function moveVerb(device) {
+    return isRollback(device) ? "Roll back" : "Update";
+  }
+
   function displayModel(device) {
     return (device.telemetry && device.telemetry.model) || device.model || "Model unavailable";
   }
@@ -339,7 +368,7 @@
       "Needs attention": "Phones failing a health check: temperature, battery, state, version or arming.",
       "Pulse degraded": "Processors that acurastpulse.com rates as investigate/watch, based on on-chain reliability rather than anything local.",
       "Scrape dead": "Phones whose accessibility service has been unbound long enough that Guardian's compute scrape is genuinely dead. Re-binding normally self-heals; a persistent one needs a reboot.",
-      "Up but stalled": "Reports Active/Running but its heartbeat is over 45 minutes old; recovery needed.",
+      "Up but stalled": "Reports 'Running' but the heartbeat has gone stale -- the node looks alive and is earning nothing.",
       "App ANRs": "Phones where the Processor's main thread has wedged long enough for Android to raise 'App isn't responding'. Guardian dismisses the dialog so the node recovers, which is exactly why this never shows up as lost earnings.",
       "Idle hub": "Phones sitting on the wallet/hub screen with 'Open Processor to Provide Compute' showing. The node is NOT computing. Detected from the foreground user over ADB, independently of Guardian.",
       "On jobs": "Phones currently running a deployment, out of those reporting telemetry at all. A phone with no job is still online, attested and heartbeating — the network simply has not assigned it work. Assignments are sticky, so a phone that loses one waits for a new deployment rather than reclaiming the old.",
@@ -483,7 +512,9 @@
     const onlineOutdated = (app.data.devices || []).filter((device) => device.updateAvailable && U.effectiveState(device) === "device");
     const selectedOutdated = onlineOutdated.filter((device) => app.selected.has(device.serial));
     const details = [release.assetName, release.sizeBytes ? formatBytes(release.sizeBytes) : "", release.publishedAt ? String(release.publishedAt).slice(0, 10) : ""].filter(Boolean).join(" · ");
-    $("#updateReleaseMeta").textContent = ready ? `Verified Lite ${release.versionName}${details ? ` · ${details}` : ""}` : `${release.error || "Downloading and verifying signed release…"}`;
+    $("#updateReleaseMeta").textContent = ready
+      ? `Verified Lite ${release.versionName}${release.targetVersion ? " · held at this version, newer builds are not offered" : ""}${details ? ` · ${details}` : ""}`
+      : `${release.error || "Downloading and verifying signed release…"}`;
     $("#updateStats").innerHTML = `<div class="update-stat"><span>Current</span><strong>${Math.max(0, (app.data.total || 0) - (app.data.updateCount || 0))}</strong></div><div class="update-stat"><span>Outdated</span><strong>${app.data.updateCount || 0}</strong></div><div class="update-stat"><span>Eligible</span><strong>${onlineOutdated.length}</strong></div><div class="update-stat"><span>Verification</span><strong style="color:${ready ? "var(--green)" : "var(--amber)"}">${ready ? "Passed" : "Pending"}</strong></div>`;
     const selectedButton = $('[data-action="update-selected"]');
     const allButton = $('[data-action="update-outdated"]');
@@ -803,7 +834,7 @@ Click to open \u00b7 Shift-click to select`;
       <td>${tempMarkup(device)}</td>
       <td>${batteryMarkup(device)}</td>
       <td><div class="cell-stack"><strong>${escapeHtml(gState)}</strong><span>${isArmed(device) ? "Armed" : device.telemetry ? "Not armed" : "No live telemetry"}${device.fgRate >= 1 ? ` · FG ${device.fgRate}/h` : ""}</span></div></td>
-      <td><div class="version-cell"><strong>${device.version ? `v${escapeHtml(device.version)}` : "—"}</strong><span class="mini-tag ${device.updateAvailable ? "update" : device.behind ? "warning" : ""}">${device.updateAvailable ? `Update → ${escapeHtml((app.data.release || {}).versionName || "ready")}` : device.behind ? "Behind observed" : device.version ? "Current" : "Not scanned"}</span></div></td>
+      <td><div class="version-cell"><strong>${device.version ? `v${escapeHtml(device.version)}` : "—"}</strong><span class="mini-tag ${device.updateAvailable ? "update" : device.behind ? "warning" : ""}">${device.updateAvailable ? `${moveVerb(device)} → ${escapeHtml((app.data.release || {}).versionName || "ready")}` : device.behind ? "Behind observed" : device.version ? "Current" : "Not scanned"}</span></div></td>
       <td><div class="cell-stack"><strong>${escapeHtml(lastSeen)}</strong><span>${device.versionCheckedAt ? `Version scan ${formatTime(device.versionCheckedAt)}` : "No version scan"}</span></div></td>
       <td>${computeBadge(device)}${idleHubBadge(device) ? "<br>" + idleHubBadge(device) : ""}${anrBadge(device) ? "<br>" + anrBadge(device) : ""}${protectionOff(device) ? '<br><span class="anr-badge unarmed-badge" title="Guardian is not armed on this device: the controller gate is shut, so it will detect problems and never act.">\u26A0 not armed</span>' : ""}${foregroundPill(device, false) ? "<br>" + foregroundPill(device, false) : ""}${pulseHealthBadge(device) ? "<br>" + pulseHealthBadge(device) : ""}</td><td class="actions-col"><div class="quick-actions">${device.updateAvailable ? `<button type="button" data-device-action="update" data-serial="${serial}" ${online ? "" : "disabled"} aria-label="Update ${escapeAttr(name)}" title="Update Lite">⇧</button>` : ""}<button type="button" data-device-action="screenshot" data-serial="${serial}" ${online ? "" : "disabled"} aria-label="Screenshot ${escapeAttr(name)}" title="Screenshot">▣</button><button type="button" data-device-action="live" data-serial="${serial}" ${online ? "" : "disabled"} aria-label="Live screen ${escapeAttr(name)}" title="${app.data.wsScrcpyUrl ? "Live screen" : "Copy scrcpy command"}">◉</button><button type="button" data-device-action="locate" data-serial="${serial}" ${online ? "" : "disabled"} aria-label="Locate ${escapeAttr(name)}" title="Locate (beacon)">📍</button>${device.address ? `<button type="button" data-device-action="pulse" data-serial="${serial}" aria-label="Open ${escapeAttr(name)} on Pulse" title="View this processor on acurastpulse.com">↗</button>` : ""}<button type="button" data-device-action="more" data-serial="${serial}" aria-label="Open ${escapeAttr(name)} details" title="Device details">•••</button></div></td>
     </tr>`;
@@ -825,8 +856,8 @@ Click to open \u00b7 Shift-click to select`;
     return `<article class="device-card ${app.selected.has(device.serial) ? "selected" : ""}" data-row-serial="${serial}" tabindex="0">
       <div class="card-head"><input type="checkbox" data-select-serial="${serial}" ${app.selected.has(device.serial) ? "checked" : ""} aria-label="Select ${escapeAttr(name)}"><div class="card-title"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(U.deviceIp(device) || device.serial)}</span></div><div class="health-score">${healthMarkup(health, true)}</div></div>
       <div class="card-metrics"><div class="card-metric" title="${U.cpuRawLoad(device) == null ? "CPU load unavailable" : `Per-core load. Raw summed load ${U.cpuRawLoad(device)}% across ${U.cpuCores(device) || "?"} cores.`}"><span>CPU</span><strong>${formatMetric(U.cpuValue(device), "%")}</strong></div><div class="card-metric"><span>Temp</span><strong>${formatMetric(U.temperatureValue(device), "°", 1)}</strong></div><div class="card-metric"><span>Battery</span><strong>${formatMetric(U.batteryValue(device), "%")}${U.isCharging(device) ? " ⚡" : ""}</strong></div></div>
-      <div class="card-details"><div class="card-detail"><span>State</span><b>${U.deviceStateBadge(device).label}</b></div><div class="card-detail"><span>Guardian</span><b>${escapeHtml(guardianState(device))}${device.fgRate >= 1 ? ` · FG ${device.fgRate}/h` : ""}</b></div><div class="card-detail"><span>Version</span><b>${device.version ? `v${escapeHtml(device.version)}${device.updateAvailable ? " · update ready" : device.behind ? " · behind" : ""}` : "Not scanned"}</b></div><div class="card-detail card-detail--compute"><span>Compute</span><b>${computeBadge(device)} ${idleHubBadge(device)} ${anrBadge(device)} ${foregroundPill(device, false)}${pulseHealthBadge(device) ? " " + pulseHealthBadge(device) : ""}${device.address ? ` · <a href="https://www.acurastpulse.com/processors/${encodeURIComponent(device.address)}" target="_blank" rel="noopener" class="pulse-link">Pulse ↗</a>` : ""}</b></div></div>
-      <div class="card-actions"><button class="button" data-device-action="wake" data-serial="${serial}" ${online ? "" : "disabled"}>Wake</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${serial}" ${online ? "" : "disabled"}>Update</button>` : `<button class="button" data-device-action="screenshot" data-serial="${serial}" ${online ? "" : "disabled"}>Screen</button>`}<button class="button" data-device-action="more" data-serial="${serial}">Details</button></div>
+      <div class="card-details"><div class="card-detail"><span>State</span><b>${U.deviceStateBadge(device).label}</b></div><div class="card-detail"><span>Guardian</span><b>${escapeHtml(guardianState(device))}${device.fgRate >= 1 ? ` · FG ${device.fgRate}/h` : ""}</b></div><div class="card-detail"><span>Version</span><b>${device.version ? `v${escapeHtml(device.version)}${device.updateAvailable ? (isRollback(device) ? " · rollback ready" : " · update ready") : device.behind ? " · behind" : ""}` : "Not scanned"}</b></div><div class="card-detail card-detail--compute"><span>Compute</span><b>${computeBadge(device)} ${idleHubBadge(device)} ${anrBadge(device)} ${foregroundPill(device, false)}${pulseHealthBadge(device) ? " " + pulseHealthBadge(device) : ""}${device.address ? ` · <a href="https://www.acurastpulse.com/processors/${encodeURIComponent(device.address)}" target="_blank" rel="noopener" class="pulse-link">Pulse ↗</a>` : ""}</b></div></div>
+      <div class="card-actions"><button class="button" data-device-action="wake" data-serial="${serial}" ${online ? "" : "disabled"}>Wake</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${serial}" ${online ? "" : "disabled"}>${moveVerb(device)}</button>` : `<button class="button" data-device-action="screenshot" data-serial="${serial}" ${online ? "" : "disabled"}>Screen</button>`}<button class="button" data-device-action="more" data-serial="${serial}">Details</button></div>
     </article>`;
   }
 
@@ -977,15 +1008,15 @@ Click to open \u00b7 Shift-click to select`;
     $("#drawerContent").innerHTML = `<header class="drawer-header"><div><span class="eyebrow">DEVICE DETAILS</span><h2 id="drawerTitle">${escapeHtml(name)}</h2><p>${escapeHtml(device.ip || device.serial)}</p></div><button class="icon-button" type="button" data-close-drawer aria-label="Close device details">×</button></header>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Overview</h3>${statusMarkup(device)}</div><div class="drawer-overview"><div class="drawer-health">${healthMarkup(health, true)}<span>${escapeHtml(health.label)} health</span></div><div class="drawer-kv"><div title="The phone's IP on the farm LAN. This is how the console reaches it over wireless ADB."><span>Host<i class="hint-dot" aria-hidden="true">?</i></span><strong>${escapeHtml(U.deviceIp(device) || "Unresolved")}</strong></div><div title="Marketing model name. Note one model can span carrier SKUs with different firmware and different bloat."><span>Model<i class="hint-dot" aria-hidden="true">?</i></span><strong>${escapeHtml(displayModel(device))}</strong></div><div title="Whether the Processor is running in an Android work profile. It is the work-profile copy that earns."><span>Profile<i class="hint-dot" aria-hidden="true">?</i></span><strong>${escapeHtml(displayProfile(device))}</strong></div><div title="When this console last had contact. 'Now' means the transport is live."><span>Last seen<i class="hint-dot" aria-hidden="true">?</i></span><strong>${escapeHtml(formatTime(device.last_seen))}</strong></div><div title="Installed Acurast Processor (Lite) build."><span>Processor version<i class="hint-dot" aria-hidden="true">?</i></span><strong>${device.version ? `v${escapeHtml(device.version)}` : "Not scanned"}</strong></div><div title="Installed Guardian build. Read from a periodic scan, not live telemetry, so it lags briefly after an update -- the freshness stamp beside it shows when it was last read."><span>Guardian version<i class="hint-dot" aria-hidden="true">?</i></span><strong>${escapeHtml(device.guardianVersion || "Not scanned")}${freshChip(device.versionCheckedAt)}</strong></div></div></div><p class="health-reasons">${escapeHtml(health.reasons.join(" · "))}${health.confidence === "limited" ? " · Score uses limited backend inputs." : ""}</p></section>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Live metrics</h3><span class="mini-tag">${device.metrics ? "ADB probe live" : device.telemetry ? "Guardian live" : device.acurast ? "Acurast live" : "Unavailable"}</span></div><div class="drawer-metrics"><div class="drawer-metric" title="${U.cpuRawLoad(device) == null ? "CPU load unavailable" : `Per-core load. Raw summed load ${U.cpuRawLoad(device)}% across ${U.cpuCores(device) || "?"} cores.`}"><span>CPU load</span><strong>${formatMetric(cpu, "%")}${U.cpuCores(device) ? ` <em class="metric-sub">of ${U.cpuCores(device)} cores</em>` : ""}</strong></div><div class="drawer-metric" title="CPU/battery temperature. Sustained highs throttle compute and shorten battery life; the fleet map's Temp mode ranks by this."><span>CPU temp<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatMetric(temperature, "°C", 1)}</strong></div><div class="drawer-metric" title="Charge level. These phones run permanently on AC, so anything not near 100% while charging suggests a bad cable, port or battery."><span>Battery<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatMetric(battery, "%")}${batteryMetrics.charging ? " ⚡" : ""}</strong></div><div class="drawer-metric" title="Current max CPU clock. A figure well below the chip's rating usually means thermal or power throttling."><span>CPU frequency<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatMetric(cpuMetrics.maxFreqMhz, " MHz")}</strong></div><div class="drawer-metric" title="Signal strength in dBm. Closer to zero is stronger; below about -75 dBm is where ADB and check-ins start dropping."><span>Wi-Fi<i class="hint-dot" aria-hidden="true">?</i></span><strong>${wifiMetrics.rssi == null ? "—" : `${wifiMetrics.rssi} dBm`}</strong></div><div class="drawer-metric" title="Available memory. These are 2-4GB devices, so low free RAM is when Android starts killing the Processor in the background."><span>RAM free<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatBytes(telemetry.ramAvailBytes)}${telemetry.ramTotalBytes ? ` <em class="metric-sub">of ${formatBytes(telemetry.ramTotalBytes)}</em>` : ""}</strong></div><div class="drawer-metric" title="Free space. Deployments download and execute code locally, so a full disk stops the node earning even though everything looks healthy."><span>Storage free<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatBytes(telemetry.storageFreeBytes)}${telemetry.storageTotalBytes ? ` <em class="metric-sub">of ${formatBytes(telemetry.storageTotalBytes)}</em>` : ""}</strong></div><div class="drawer-metric" title="Time since last boot. Very long uptimes are normal here, but a short one means the phone rebooted -- planned or otherwise."><span>Uptime<i class="hint-dot" aria-hidden="true">?</i></span><strong>${formatUptime(telemetry.uptimeMs)}</strong></div></div></section>
-      <section class="drawer-section"><div class="drawer-section-heading"><h3>Device state</h3>${foregroundPill(device, true)}</div><div class="state-grid">${stateItem("Lite on top", telemetry.targetOnTop === undefined ? "Not reported" : telemetry.targetOnTop === null ? "Unknown — a11y signal stale" : telemetry.targetOnTop ? "Yes" : `No — ${telemetry.topPackage || "another app"}`)}${stateItem("Screen", metrics.wake || telemetry.screenState || "Not reported")}${stateItem("Guardian", telemetry.guardianState || device.guardianVersion || "Not scanned")}${stateItem("Fleet armed", isArmed(device) ? "Armed" : device.telemetry || device.guardianArmed === false ? "Not armed" : "Not reported")}${stateItem("ADB", U.deviceStateBadge(device).label)}${stateItem("WD keep-alive", arm.wdKeepAlive == null ? "Not reported" : arm.wdKeepAlive ? "Enabled" : "Disabled")}${stateItem("Processor", metrics.proc ? metrics.proc.alive ? `Running · PID ${metrics.proc.pid || "?"}` : "Not running" : "Not reported")}${stateItem("Work profile", device.inWorkProfile ? "Detected" : "Not detected")}${stateItem("Update", device.updateAvailable ? `Ready → ${(app.data.release || {}).versionName || "latest"}` : device.behind ? "Behind observed" : device.version ? "Current" : "Not scanned")}${stateItem("FG losses", fgText)}${stateItem("ANRs", telemetry.anrSinceBoot == null ? "Not reported" : telemetry.anrSinceBoot === 0 ? "None since boot" : `${telemetry.anrSinceBoot} since boot${telemetry.lastAnrTs ? ` \u00b7 last ${formatTime(telemetry.lastAnrTs / 1000)}` : ""}`)}${stateItem("Protection", (() => { const a = telemetry.arm || {}; const on = a.protectionEnabled ?? a.protectionRunning; return on == null ? "Not reported" : on ? "Armed \u00b7 Guardian will act" : "NOT ARMED \u2014 Guardian will not act"; })())}${stateItem("A11y events", telemetry.a11yEventsAlive == null ? "Not reported" : telemetry.a11yEventsAlive ? "Flowing" : "Bound but silent \u2014 zombie binding")}${stateItem("Provide-compute button", telemetry.provideComputeVisible == null ? "Not reported" : telemetry.provideComputeVisible ? "VISIBLE \u2014 node is idle" : "Not shown")}${stateItem("Telemetry", telemetry.telemetryDriver ? `${escapeHtml(telemetry.telemetryDriver)}${telemetry.sinceLastPushSec != null ? ` \u00b7 last push ${telemetry.sinceLastPushSec}s` : ""}` : "Not reported")}${stateItem("Android", telemetry.androidRelease ? `${escapeHtml(String(telemetry.androidRelease))}${telemetry.securityPatch ? ` \u00b7 patch ${escapeHtml(String(telemetry.securityPatch))}` : ""}` : "Not reported")}</div></section>
+      <section class="drawer-section"><div class="drawer-section-heading"><h3>Device state</h3>${foregroundPill(device, true)}</div><div class="state-grid">${stateItem("Lite on top", telemetry.targetOnTop === undefined ? "Not reported" : telemetry.targetOnTop === null ? "Unknown — a11y signal stale" : telemetry.targetOnTop ? "Yes" : `No — ${telemetry.topPackage || "another app"}`)}${stateItem("Screen", metrics.wake || telemetry.screenState || "Not reported")}${stateItem("Guardian", telemetry.guardianState || device.guardianVersion || "Not scanned")}${stateItem("Fleet armed", isArmed(device) ? "Armed" : device.telemetry || device.guardianArmed === false ? "Not armed" : "Not reported")}${stateItem("ADB", U.deviceStateBadge(device).label)}${stateItem("WD keep-alive", arm.wdKeepAlive == null ? "Not reported" : arm.wdKeepAlive ? "Enabled" : "Disabled")}${stateItem("Processor", metrics.proc ? metrics.proc.alive ? `Running · PID ${metrics.proc.pid || "?"}` : "Not running" : "Not reported")}${stateItem("Work profile", device.inWorkProfile ? "Detected" : "Not detected")}${stateItem("Update", device.updateAvailable ? `${isRollback(device) ? "Roll back" : "Ready"} → ${(app.data.release || {}).versionName || "latest"}` : device.behind ? "Behind observed" : device.version ? heldVersion() ? `Held at ${escapeHtml(heldVersion())}` : "Current" : "Not scanned")}${stateItem("FG losses", fgText)}${stateItem("ANRs", telemetry.anrSinceBoot == null ? "Not reported" : telemetry.anrSinceBoot === 0 ? "None since boot" : `${telemetry.anrSinceBoot} since boot${telemetry.lastAnrTs ? ` \u00b7 last ${formatTime(telemetry.lastAnrTs / 1000)}` : ""}`)}${stateItem("Protection", (() => { const a = telemetry.arm || {}; const on = a.protectionEnabled ?? a.protectionRunning; return on == null ? "Not reported" : on ? "Armed \u00b7 Guardian will act" : "NOT ARMED \u2014 Guardian will not act"; })())}${stateItem("A11y events", telemetry.a11yEventsAlive == null ? "Not reported" : telemetry.a11yEventsAlive ? "Flowing" : "Bound but silent \u2014 zombie binding")}${stateItem("Provide-compute button", telemetry.provideComputeVisible == null ? "Not reported" : telemetry.provideComputeVisible ? "VISIBLE \u2014 node is idle" : "Not shown")}${stateItem("Telemetry", telemetry.telemetryDriver ? `${escapeHtml(telemetry.telemetryDriver)}${telemetry.sinceLastPushSec != null ? ` \u00b7 last push ${telemetry.sinceLastPushSec}s` : ""}` : "Not reported")}${stateItem("Android", telemetry.androidRelease ? `${escapeHtml(String(telemetry.androidRelease))}${telemetry.securityPatch ? ` \u00b7 patch ${escapeHtml(String(telemetry.securityPatch))}` : ""}` : "Not reported")}</div></section>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Current workload</h3></div>${device.address ? `<div class="button-row"><a class="button" href="https://www.acurastpulse.com/processors/${encodeURIComponent(device.address)}" target="_blank" rel="noopener">View workload on Pulse ↗</a></div>` : `<div class="drawer-empty">No processor address captured yet — workload &amp; earning appear on Pulse once this phone reports its address.</div>`}</section>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>History · 24 hours</h3><button class="button" type="button" data-action="open-device-analytics" data-serial="${escapeAttr(serial)}">Full analytics</button></div><div id="drawerHistory" class="drawer-chart"><div class="loading-orbit"></div></div></section>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Operations</h3><div class="button-row"><button class="button" data-device-action="rename" data-serial="${escapeAttr(serial)}">Rename</button>${device.address ? `<button class="button" data-device-action="pulse" data-serial="${escapeAttr(serial)}">Pulse ↗</button>` : ""}</div></div>
       <div class="drawer-action-group"><span class="drawer-action-label">Diagnostics</span><div class="drawer-actions"><button class="button" data-device-action="screenshot" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Screenshot</button><button class="button" data-device-action="live" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Live screen</button><button class="button" data-device-action="logcat" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Logcat</button><button class="button" data-device-action="shell-one" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Shell</button></div></div>
-      <div class="drawer-action-group"><span class="drawer-action-label">Control</span><div class="drawer-actions"><button class="button" data-device-action="wake" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Wake</button><button class="button" data-device-action="open_acurast" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Open Acurast</button><button class="button" data-device-action="provision" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Provision</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Update Lite</button>` : ""}<button class="button" data-device-action="reset-fg" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reset FG</button><button class="button" data-device-action="locate" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>📍 Locate</button><button class="button" data-device-action="locate-stop" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Stop</button></div></div>
+      <div class="drawer-action-group"><span class="drawer-action-label">Control</span><div class="drawer-actions"><button class="button" data-device-action="wake" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Wake</button><button class="button" data-device-action="open_acurast" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Open Acurast</button><button class="button" data-device-action="provision" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Provision</button>${device.updateAvailable ? `<button class="button primary" data-device-action="update" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>${moveVerb(device)} Lite</button>` : ""}<button class="button" data-device-action="reset-fg" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reset FG</button><button class="button" data-device-action="locate" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>📍 Locate</button><button class="button" data-device-action="locate-stop" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Stop</button></div></div>
       <div class="drawer-action-group"><span class="drawer-action-label">Maintenance</span><div class="drawer-actions"><button class="button" data-device-action="pause-15" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for 15 minutes so you can use the phone">⏸ Pause 15m</button><button class="button" data-device-action="pause-60" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="Pause Guardian recovery for an hour">⏸ Pause 60m</button><button class="button" data-device-action="resume" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"} title="End the maintenance window now">▶ Resume</button></div></div>
       <div class="drawer-danger" role="group" aria-label="Destructive operations"><span class="drawer-danger-label">Danger zone</span>
-        <div class="drawer-danger-row"><div><strong>Recover stale heartbeat</strong><small>Try stopping and relaunching Acurast. Check for a fresh heartbeat afterward.</small></div><button class="button" data-device-action="recover_compute" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Recover compute</button></div>
+        <div class="drawer-danger-row"><div><strong>Recover stale heartbeat</strong><small>Try stopping and relaunching Acurast. Verify a fresh heartbeat afterward.</small></div><button class="button" data-device-action="recover_compute" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Recover compute</button></div>
         <div class="drawer-danger-row"><div><strong>Reboot device</strong><small>Disconnects wireless ADB and stops earning until Guardian restores connectivity.</small></div><button class="button danger" data-device-action="reboot" data-serial="${escapeAttr(serial)}" ${online ? "" : "disabled"}>Reboot</button></div>
         <div class="drawer-danger-row"><div><strong>Forget device</strong><small>Removes it from the fleet and drops its ADB transport. Requires typing FORGET.</small></div><button class="button danger" data-device-action="forget" data-serial="${escapeAttr(serial)}">Forget</button></div>
       </div></section>
@@ -1235,6 +1266,16 @@ function formatUptime(ms) {
 
 function computeBadge(device) {
     const t = device.telemetry || {};
+    // A wedged processor reads healthy on every other signal: process alive, adb connected,
+    // screen scrape fine, heartbeat field not yet stale. Only ServiceRecord state exposes it
+    // (CheckInService started and then did nothing), so this verdict has to win over the rest.
+    const wedge = device.wedge;
+    if (wedge && wedge.wedged) {
+      const why = "Processor wedged — " + (wedge.reason || "CheckInService inert")
+        + ". It has started nothing since creation, so heartbeats have stopped while the phone still looks healthy."
+        + " Recover compute, or reinstall Lite, to clear it.";
+      return `<span class="compute-stalled" title="${escapeAttr(why)}">◑ Wedged</span>`;
+    }
     const status = t.computeStatus;
     const active = t.computeActive;
     if (status == null && active == null && t.heartbeatAgeMin == null) {
@@ -1250,7 +1291,7 @@ function computeBadge(device) {
       }
       return '<span class="muted-cell" title="Compute state hidden while the screensaver covers Lite. Accessibility service is alive, so this is expected, not a fault.">\u2014</span>';
     }
-    const earning = t.earning;            // Guardian heartbeat-aware health
+    const earning = t.earning;            // v1.1.27+: Running AND heartbeat < 15min
     const hbAge = t.heartbeatAgeMin;
     // "up but stalled": Lite still says Running, but the heartbeat has gone quiet, so the phone
     // earns nothing while looking healthy. This is the case computeActive alone cannot see.
@@ -1656,7 +1697,8 @@ function computeBadge(device) {
     const eligible = serials.map((serial) => app.devicesById.get(serial)).filter((device) => device && device.updateAvailable && U.effectiveState(device) === "device");
     if (!eligible.length) return toast("No eligible devices", "Select one or more online outdated devices.", "error");
     const batch = app.data.updateBatch || { wave_size: 4, wave_delay_sec: 15 };
-    const confirmed = await confirmAction({ title: `Update ${eligible.length} device${eligible.length === 1 ? "" : "s"} → ${release.versionName}?`, body: `Installs ${release.assetName || "the verified Lite APK"} in waves of ${batch.wave_size}, ${batch.wave_delay_sec} seconds apart. Each processor briefly restarts and self-recovers.`, phrase: "UPDATE", actionLabel: "Push update", danger: false });
+    const backwards = eligible.filter(isRollback).length;
+    const confirmed = await confirmAction({ title: `${backwards ? "Roll back" : "Update"} ${eligible.length} device${eligible.length === 1 ? "" : "s"} → ${release.versionName}?`, body: `Installs ${release.assetName || "the verified Lite APK"} in waves of ${batch.wave_size}, ${batch.wave_delay_sec} seconds apart. Each processor briefly restarts and self-recovers.${backwards ? ` ${backwards} of these ${backwards === 1 ? "is" : "are"} on a NEWER build and will be moved backwards. Android 14+ refuses a downgrade, so those devices will fail with INSTALL_FAILED_VERSION_DOWNGRADE.` : ""}`, phrase: backwards ? "ROLL BACK" : "UPDATE", actionLabel: backwards ? "Push rollback" : "Push update", danger: Boolean(backwards) });
     if (!confirmed) return;
     try {
       const result = await api("/api/update-batch", { serials: eligible.map((device) => device.serial), wave_size: batch.wave_size, wave_delay_sec: batch.wave_delay_sec });
@@ -1673,12 +1715,13 @@ function computeBadge(device) {
     const release = app.data.release || {};
     if (!device || !device.updateAvailable) return;
     if (!release.ready) return toast("Update not ready", "The signed release has not finished verification.", "error");
-    const confirmed = await confirmAction({ title: `Update ${displayName(device)} → ${release.versionName}?`, body: "The verified Lite APK will be installed with adb install -r. The processor restarts and self-recovers.", actionLabel: "Update device", danger: false });
+    const back = isRollback(device);
+    const confirmed = await confirmAction({ title: `${back ? "Roll back" : "Update"} ${displayName(device)} → ${release.versionName}?`, body: `The verified Lite APK will be installed with adb install -r${back ? " -d" : ""}. The processor restarts and self-recovers.${back ? " This moves the device BACKWARDS; on Android 14+ the platform refuses a downgrade and the install will fail." : ""}`, actionLabel: back ? "Roll back device" : "Update device", danger: back });
     if (!confirmed) return;
     try {
       const result = await api("/api/update", { serial });
       if (result.ok === false) throw new Error(result.message || "Update failed");
-      if (result.result) showResults(`Update → ${release.versionName}`, [result.result]);
+      if (result.result) showResults(`${back ? "Roll back" : "Update"} → ${release.versionName}`, [result.result]);
       recordAction(`Lite ${release.versionName} update started`, [device]);
       await poll();
     } catch (error) { toast("Update failed", error.message, "error"); }
@@ -1714,6 +1757,62 @@ function computeBadge(device) {
     window.open(`https://www.acurastpulse.com/processors/${encodeURIComponent(device.address)}`, "_blank", "noopener");
   }
 
+  // The device table only lists what adb can see, so it can never show what is ABSENT.
+  // The roster comes from device_state.json (persisted, keyed by on-chain address), which is
+  // the only record that survives a console restart.
+  // Marking every REACHABLE phone is how you find the unreachable ones: the dark screens are the
+  // phones the console cannot see. Quiet mode is silent and still, so a whole rack can be marked
+  // without an alarm in the room, and it pauses Guardian for the same window so picking a handset
+  // up does not fight foreground reclaim.
+  async function markQuietOnline(button) {
+    const serials = (app.data.devices || [])
+      .filter((device) => U.effectiveState(device) === "device")
+      .map((device) => device.serial);
+    if (!serials.length) return toast("Nothing to mark", "No devices are connected.", "error");
+    setBusy(button, true, "Marking\u2026");
+    try {
+      const result = await api("/api/guardian/locate", { serials, quiet: true });
+      const ok = result.located || 0;
+      const paused = (result.results || []).filter((r) => r.paused).length;
+      toast("Marked " + ok + " of " + serials.length,
+        "Green screens for 15 min, Guardian paused on " + paused + ". Anything still dark is not on the console.");
+    } catch (error) {
+      toast("Mark failed", error.message, "error");
+    } finally { setBusy(button, false); }
+  }
+
+  async function markQuietStop(button) {
+    const serials = (app.data.devices || [])
+      .filter((device) => U.effectiveState(device) === "device")
+      .map((device) => device.serial);
+    if (!serials.length) return;
+    setBusy(button, true, "Clearing\u2026");
+    try {
+      await api("/api/guardian/locate", { serials, stop: true });
+      toast("Marks cleared", "Screens dismissed. The maintenance window still expires on its own.");
+    } catch (error) {
+      toast("Clear failed", error.message, "error");
+    } finally { setBusy(button, false); }
+  }
+
+  function openRoster() {
+    const rows = (app.data && app.data.roster) || [];
+    const online = rows.filter((r) => r.online).length;
+    const missing = rows.length - online;
+    $("#rosterSummary").textContent = rows.length
+      ? `${rows.length} known · ${online} connected · ${missing} missing`
+      : "No roster yet — the console records each phone the first time it connects.";
+    $("#rosterList").innerHTML = rows.length ? rows.map((r) => {
+      const gone = r.missingSec == null ? "unknown"
+        : r.missingSec < 3600 ? `${Math.round(r.missingSec / 60)}m`
+        : r.missingSec < 86400 ? `${Math.round(r.missingSec / 3600)}h`
+        : `${Math.round(r.missingSec / 86400)}d`;
+      const name = r.alias || r.codename || "unknown";
+      return `<div class="roster-row ${r.online ? "is-online" : "is-missing"}"><i></i><b>${escapeHtml(name)}</b><span class="addr" title="${escapeAttr(r.address)}">${escapeHtml(r.address)}</span><em>${r.online ? "connected" : "missing " + gone}</em></div>`;
+    }).join("") : '<div class="drawer-empty">Nothing recorded yet.</div>';
+    $("#rosterDlg").showModal();
+  }
+
   async function openOnboard() {
     $("#pairingHost").value = "";
     $("#pairingCode").value = "";
@@ -1744,6 +1843,9 @@ function computeBadge(device) {
     log.scrollTop = log.scrollHeight;
   }
 
+  // One Acurast epoch (900 blocks × 6s = 90 min); the console clamps to 1..1440.
+  const ONBOARD_MAINTENANCE_MINUTES = 90;
+
   async function runOnboarding() {
     const host = $("#pairingHost").value.trim();
     const code = $("#pairingCode").value.trim();
@@ -1763,15 +1865,41 @@ function computeBadge(device) {
         await poll();
         return;
       }
-      onboardLog("Waiting for the new mDNS transport…");
+      onboardLog("Waiting for the mDNS transport…");
+      // Re-onboarding a phone that is ALREADY connected produces no new serial, so matching only on
+      // "a serial that was not online before" silently skipped provisioning on every such phone.
+      // Fall back to matching the paired host's IP, which covers both a fresh handset and a re-run.
+      const wantIp = String(host).split(":")[0];
       let serial = null;
+      let alreadyOnline = false;
       for (let attempt = 0; attempt < 24 && $("#onboardDlg").open; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 2500));
         await poll();
-        const fresh = (app.data.devices || []).find((device) => U.effectiveState(device) === "device" && !before.has(device.serial));
-        if (fresh) { serial = fresh.serial; onboardLog(`✓ Connected · ${displayName(fresh)}`); break; }
+        const online = (app.data.devices || []).filter((device) => U.effectiveState(device) === "device");
+        const fresh = online.find((device) => !before.has(device.serial));
+        const byIp = online.find((device) => device.ip === wantIp);
+        const match = fresh || byIp;
+        if (match) {
+          serial = match.serial;
+          alreadyOnline = !fresh;
+          onboardLog(`✓ ${alreadyOnline ? "Already connected" : "Connected"} · ${displayName(match)}`);
+          break;
+        }
       }
       if (!serial) { onboardLog("⚠ The phone did not appear within 60 seconds. Check the fleet table, then install and provision manually."); return; }
+      // An already-provisioned handset keeps yanking Lite back to the foreground while we work.
+      // A maintenance window suppresses reclaim for one epoch; it self-expires and self-restores,
+      // so a fresh phone with no Guardian just reports nothing and we carry on.
+      onboardLog(`Pausing Guardian for ${ONBOARD_MAINTENANCE_MINUTES} min…`);
+      try {
+        const paused = await api("/api/guardian/maintenance", { serials: [serial], enter: true, minutes: ONBOARD_MAINTENANCE_MINUTES });
+        const pausedResult = (paused.results || [])[0] || {};
+        onboardLog(pausedResult.ok
+          ? `✓ Guardian paused · foreground reclaim suppressed for ${ONBOARD_MAINTENANCE_MINUTES} min`
+          : "· No Guardian to pause yet — continuing");
+      } catch (error) {
+        onboardLog(`· Could not pause Guardian (${error.message}) — continuing`);
+      }
       const tag = $("#guardianRelease").value || "latest";
       onboardLog(`Installing Guardian ${tag} · verifying SHA-256 and signing certificate…`);
       const install = await api("/api/guardian/install", { serials: [serial], tag });
@@ -1786,6 +1914,15 @@ function computeBadge(device) {
       const result = (provisioned.results || [])[0] || {};
       if (!result.ok) throw new Error(result.armed || "Provisioning did not confirm armed state");
       onboardLog(`✓ ${result.armed}`);
+      try {
+        const resumed = await api("/api/guardian/maintenance", { serials: [serial], enter: false });
+        const resumedResult = (resumed.results || [])[0] || {};
+        onboardLog(resumedResult.ok
+          ? "✓ Guardian resumed · maintenance window closed"
+          : "⚠ Guardian did not confirm resume — window expires on its own");
+      } catch (error) {
+        onboardLog(`⚠ Could not resume Guardian (${error.message}) — window expires on its own`);
+      }
       onboardLog("✓ Onboarding complete. Wireless ADB and Processor recovery are armed.");
       recordAction("Phone onboarded and armed", [app.devicesById.get(serial)].filter(Boolean));
       toast("Phone onboarded", result.armed || "Guardian confirmed armed.");
@@ -2807,6 +2944,9 @@ function computeBadge(device) {
       if (action === "provision-selected") return provisionDevices(onlineSerials("selected"));
       if (action === "provision-online") return provisionDevices(onlineSerials("online"), true);
       if (action === "open-onboard") return openOnboard();
+      if (action === "open-roster") return openRoster();
+      if (action === "mark-quiet-online") return markQuietOnline(actionButton);
+      if (action === "mark-quiet-stop") return markQuietStop(actionButton);
       if (action === "pairing-refresh") return loadPairingDevices(actionButton);
       if (action === "open-debloat") return openDebloat();
       if (action === "debloat-refresh") return loadDebloatReport(actionButton);

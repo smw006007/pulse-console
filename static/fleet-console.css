@@ -589,9 +589,13 @@ dialog input[type="text"], dialog textarea { width: 100%; }
   .fleet-header { align-items: flex-start; }
   .refresh-meta { display: none; }
 }
+/* Sidebar-only operations vanish under 760px; surface the critical one in the header. */
+.mobile-only { display: none; }
+
 @media (max-width: 760px) {
   :root { --sidebar-width: 0px; }
   .sidebar { display: none; }
+  .mobile-only { display: inline-flex; }
   .fleet-header { position: relative; min-height: 0; padding: 19px; flex-direction: column; align-items: stretch; gap: 15px; }
   .header-actions { flex-wrap: wrap; }
   .section { margin-left: 14px; margin-right: 14px; }
@@ -963,7 +967,7 @@ body.is-compact .device-table .anr-badge { padding: 0 5px; font-size: 9px; }
 .setup-group--advanced:not([open]) { opacity: .7; }
 
 /* --- Server settings: spacing + measure pass --------------------------------------------
-   The first cut stretched every input the full dialog width, so a short value got a 750px box, and
+   The first cut stretched every input the full dialog width, so "868" got a 750px box, and
    the scroll body had 2px of horizontal padding which put content under the scrollbar. */
 .setup-body { padding: 2px 18px 20px 2px; gap: 20px; }
 .setup-row { gap: 5px; max-width: 560px; }
@@ -986,3 +990,15 @@ body.is-compact .device-table .anr-badge { padding: 0 5px; font-size: 9px; }
 .setup-row--bool .setup-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .setup-row--bool .setup-toggle input { width: auto; }
 .setup-row--bool .setup-toggle span { display: flex; align-items: center; gap: 8px; }
+
+/* Fleet roster: green = adb-connected now, grey = in the roster but missing. */
+.roster-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.roster-row:last-child { border-bottom: 0; }
+.roster-row i { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #57606b; }
+.roster-row.is-online i { background: #35c46b; }
+.roster-row b { font-weight: 600; min-width: 62px; }
+.roster-row span.addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: .72; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.roster-row em { font-style: normal; opacity: .75; flex: none; }
+.roster-row.is-missing em { color: #e0913f; }
