@@ -133,7 +133,7 @@ silent, no alarm, no vibration — and pauses Guardian for the same window. Anyt
 rack is a phone the console cannot reach. That is the fastest way to find them physically, since a
 phone that is missing is by definition one you cannot send anything to.
 
-Requires Pulse Guardian 1.3.0+ for the quiet green marker; older builds show the red locate beacon
+Requires Pulse Guardian 1.3.1+ for the quiet green marker; older builds show the red locate beacon
 instead, which is louder but still tells you which phone is which.
 
 ### Wedged processor detection
